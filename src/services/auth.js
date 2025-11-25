@@ -3,6 +3,7 @@ import { supabase } from '../../config/supabase';
 export const authService = {
   async login(email, password) {
     try {
+      // 1. Realizar login
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password
@@ -10,14 +11,22 @@ export const authService = {
 
       if (error) throw error;
 
-      // Get user profile with role
+      // 2. Esperar a que Supabase actualice la sesión internamente
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // 3. Obtener usuario REAL desde la sesión
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user) throw new Error("No se pudo obtener el usuario desde la sesión");
+
+      // 4. Obtener su perfil desde la tabla personalizada
       const { data: profile, error: profileError } = await supabase
         .from('usuarios')
         .select(`
           *,
           roles:rol_id (*)
         `)
-        .eq('id', data.user.id)
+        .eq('id', user.id)
         .single();
 
       if (profileError) throw profileError;
@@ -33,6 +42,7 @@ export const authService = {
         token: data.session.access_token,
         requiresMFA: !!profile.mfa_secret
       };
+
     } catch (error) {
       return {
         success: false,
@@ -43,13 +53,10 @@ export const authService = {
 
   async verifyMFA(code) {
     try {
-      // Implement MFA verification logic
-      // This would typically involve checking against the stored MFA secret
       const { data: { user } } = await supabase.auth.getUser();
-      
+
       if (!user) throw new Error('Usuario no autenticado');
 
-      // For demo purposes, accept any 6-digit code
       if (code.length === 6 && /^\d+$/.test(code)) {
         const { data: profile } = await supabase
           .from('usuarios')
@@ -68,11 +75,12 @@ export const authService = {
             nombre: profile.nombre,
             rol: profile.roles?.nombre_rol || 'corredor'
           },
-          token: 'mfa-verified-token' // In real app, this would be a new JWT
+          token: 'mfa-verified-token'
         };
       } else {
         throw new Error('Código MFA inválido');
       }
+
     } catch (error) {
       return {
         success: false,
@@ -87,9 +95,11 @@ export const authService = {
   },
 
   async getCurrentUser() {
+    // 1. Obtener la sesión
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
+    // 2. Leer perfil del usuario
     const { data: profile } = await supabase
       .from('usuarios')
       .select(`

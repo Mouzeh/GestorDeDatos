@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { Search, Filter, Download, Eye, Edit, Trash2, File } from 'lucide-react';  // ✅ AGREGADO File
+import { certificatesService } from '../../services/supabase/certificates';
+import { Search, Filter, Download, Eye, Edit, Trash2, File, RefreshCw } from 'lucide-react';
 
 const CertificateList = () => {
   const { user } = useAuth();
@@ -9,78 +10,62 @@ const CertificateList = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  // -----------------------------
-  // MOCK DATA (para pruebas)
-  // -----------------------------
-  const mockCertificates = [
-    {
-      id: 1,
-      nombre: 'Certificado_Tributario_2024_001.pdf',
-      emisor: 'SII',
-      contribuyente: 'Empresa ABC SpA',
-      fechaCarga: '2024-01-15',
-      estado: 'validado',
-      usuario: 'corredor@inacap.cl'
-    },
-    {
-      id: 2,
-      nombre: 'DTE_764523.pdf',
-      emisor: 'Facturador Electrónico',
-      contribuyente: 'Comercio XYZ Ltda',
-      fechaCarga: '2024-01-14',
-      estado: 'pendiente',
-      usuario: 'admin@inacap.cl'
-    },
-    {
-      id: 3,
-      nombre: 'Certificado_Retencion.pdf',
-      emisor: 'Banco Estado',
-      contribuyente: 'Servicios Técnicos SpA',
-      fechaCarga: '2024-01-13',
-      estado: 'error',
-      usuario: 'corredor@inacap.cl'
-    },
-    {
-      id: 4,
-      nombre: 'Documento_Tributario_88945.pdf',
-      emisor: 'SII',
-      contribuyente: 'Importaciones Globales',
-      fechaCarga: '2024-01-12',
-      estado: 'enviado_sii',
-      usuario: 'admin@inacap.cl'
-    }
-  ];
+  // -----------------------------------------------------
+  // Cargar certificados reales desde Supabase
+  // -----------------------------------------------------
+  const loadCertificates = async () => {
+    setLoading(true);
+    try {
+      const result = await certificatesService.getCertificates(user.id);
 
-  // Simular carga inicial
-  useEffect(() => {
-    setTimeout(() => {
-      setCertificates(mockCertificates);
-      setFilteredCertificates(mockCertificates);
+      if (result.success) {
+        console.log("📥 Certificados cargados:", result.certificates);
+        setCertificates(result.certificates);
+      } else {
+        console.error("❌ Error cargando certificados:", result.error);
+        setCertificates([]);
+      }
+    } catch (error) {
+      console.error("❌ Error en loadCertificates:", error);
+      setCertificates([]);
+    } finally {
       setLoading(false);
-    }, 1000);
-  }, []);
+      setRefreshing(false);
+    }
+  };
 
+  useEffect(() => {
+    loadCertificates();
+    // Permitir refrescar desde otros componentes
+    window.updateCertificateList = loadCertificates;
+  }, [user.id]);
+
+  // -----------------------------------------------------
   // Filtrado dinámico
+  // -----------------------------------------------------
   useEffect(() => {
     let filtered = certificates;
 
     if (searchTerm) {
       filtered = filtered.filter(cert =>
-        cert.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        cert.emisor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        cert.contribuyente.toLowerCase().includes(searchTerm.toLowerCase())
+        cert.nombre_archivo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        cert.emisor?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        cert.contribuyente?.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
 
-    if (statusFilter !== 'all') {
+    if (statusFilter !== "all") {
       filtered = filtered.filter(cert => cert.estado === statusFilter);
     }
 
     setFilteredCertificates(filtered);
   }, [searchTerm, statusFilter, certificates]);
 
-  // Badges de estado
+  // -----------------------------------------------------
+  // Badge de estado
+  // -----------------------------------------------------
   const getStatusBadge = (estado) => {
     const statusConfig = {
       validado: { color: 'bg-green-100 text-green-800', label: 'Validado' },
@@ -98,17 +83,56 @@ const CertificateList = () => {
     );
   };
 
-  // Acciones
-  const handleDownload = (certificate) => alert(`Descargando: ${certificate.nombre}`);
-  const handleView = (certificate) => alert(`Vista previa: ${certificate.nombre}`);
+  // -----------------------------------------------------
+  // Descargar archivo real desde Supabase
+  // -----------------------------------------------------
+  const handleDownload = async (certificate) => {
+    try {
+      const result = await certificatesService.downloadCertificate(certificate.storage_key);
 
-  const handleDelete = (certificate) => {
-    if (window.confirm(`¿Estás seguro de eliminar ${certificate.nombre}?`)) {
-      setCertificates(prev => prev.filter(c => c.id !== certificate.id));
+      if (!result.success) {
+        return alert("Error al descargar: " + result.error);
+      }
+
+      const url = window.URL.createObjectURL(result.file);
+      const a = document.createElement("a");
+
+      a.href = url;
+      a.download = certificate.nombre_archivo;
+      a.click();
+
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      alert("Error al descargar archivo: " + error.message);
     }
   };
 
-  // Loading
+  // -----------------------------------------------------
+  // Eliminar archivo real desde Supabase
+  // -----------------------------------------------------
+  const handleDelete = async (certificate) => {
+    if (!window.confirm(`¿Eliminar el certificado "${certificate.nombre_archivo}"?`)) return;
+
+    try {
+      const result = await certificatesService.deleteCertificate(
+        certificate.id,
+        certificate.storage_key
+      );
+
+      if (result.success) {
+        setCertificates(prev => prev.filter(c => c.id !== certificate.id));
+        alert("Certificado eliminado correctamente");
+      } else {
+        alert("Error al eliminar: " + result.error);
+      }
+    } catch (error) {
+      alert("Error al eliminar certificado: " + error.message);
+    }
+  };
+
+  // -----------------------------------------------------
+  // Loading spinner
+  // -----------------------------------------------------
   if (loading) {
     return (
       <div className="flex justify-center items-center py-12">
@@ -117,14 +141,15 @@ const CertificateList = () => {
     );
   }
 
-  // -----------------------------
-  // RENDER PRINCIPAL
-  // -----------------------------
+  // -----------------------------------------------------
+  // Render principal
+  // -----------------------------------------------------
   return (
     <div className="space-y-6">
 
       {/* Filtros */}
       <div className="flex flex-col sm:flex-row gap-4 justify-between">
+        {/* Buscar */}
         <div className="flex-1 max-w-md">
           <div className="relative">
             <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
@@ -138,6 +163,7 @@ const CertificateList = () => {
           </div>
         </div>
 
+        {/* Estado */}
         <div className="flex gap-3">
           <select
             value={statusFilter}
@@ -150,6 +176,15 @@ const CertificateList = () => {
             <option value="error">Con error</option>
             <option value="enviado_sii">Enviados SII</option>
           </select>
+
+          {/* Botón refrescar */}
+          <button
+            onClick={() => { setRefreshing(true); loadCertificates(); }}
+            className="btn-primary flex items-center gap-2"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+            Refrescar
+          </button>
         </div>
       </div>
 
@@ -159,7 +194,7 @@ const CertificateList = () => {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="table-header">Nombre</th>
+                <th className="table-header">Archivo</th>
                 <th className="table-header">Emisor</th>
                 <th className="table-header">Contribuyente</th>
                 <th className="table-header">Fecha</th>
@@ -171,30 +206,25 @@ const CertificateList = () => {
             <tbody className="bg-white divide-y divide-gray-200">
               {filteredCertificates.map((certificate) => (
                 <tr key={certificate.id} className="hover:bg-gray-50">
-                  
+
                   {/* Nombre */}
                   <td className="table-cell">
                     <div className="flex items-center">
                       <File className="w-4 h-4 text-gray-400 mr-2" />
-                      <span className="font-medium text-gray-900">{certificate.nombre}</span>
+                      <span className="font-medium text-gray-900">{certificate.nombre_archivo}</span>
                     </div>
                   </td>
 
                   <td className="table-cell">{certificate.emisor}</td>
                   <td className="table-cell">{certificate.contribuyente}</td>
-                  <td className="table-cell">{certificate.fechaCarga}</td>
+                  <td className="table-cell">{certificate.fecha_carga}</td>
 
-                  <td className="table-cell">
-                    {getStatusBadge(certificate.estado)}
-                  </td>
+                  {/* Estado */}
+                  <td className="table-cell">{getStatusBadge(certificate.estado)}</td>
 
                   {/* Acciones */}
                   <td className="table-cell">
                     <div className="flex space-x-2">
-                      <button onClick={() => handleView(certificate)} className="text-blue-600 hover:text-blue-800">
-                        <Eye className="w-4 h-4" />
-                      </button>
-
                       <button onClick={() => handleDownload(certificate)} className="text-green-600 hover:text-green-800">
                         <Download className="w-4 h-4" />
                       </button>
@@ -223,6 +253,7 @@ const CertificateList = () => {
 
       {/* Estadísticas */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+
         <div className="card text-center">
           <div className="text-2xl font-bold text-gray-900">{certificates.length}</div>
           <div className="text-sm text-gray-600">Total</div>
@@ -248,8 +279,8 @@ const CertificateList = () => {
           </div>
           <div className="text-sm text-gray-600">Con error</div>
         </div>
-      </div>
 
+      </div>
     </div>
   );
 };

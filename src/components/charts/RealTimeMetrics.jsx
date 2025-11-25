@@ -3,38 +3,27 @@ import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 
 const RealTimeMetrics = () => {
   const [metrics, setMetrics] = useState({
-    tiempoRespuesta: 1.2,
-    tasaExito: 94.5,
-    usuariosConectados: 12,
-    certificadosHora: 45
+    tiempoRespuesta: 0.0,
+    tasaExito: 0.0,
+    usuariosConectados: 1,
+    certificadosHora: 0
   });
 
   const [trends, setTrends] = useState({
-    tiempoRespuesta: 'up',
-    tasaExito: 'up',
-    usuariosConectados: 'down',
-    certificadosHora: 'up'
+    tiempoRespuesta: 'stable',
+    tasaExito: 'stable',
+    usuariosConectados: 'stable',
+    certificadosHora: 'stable'
   });
 
+  // En un sistema nuevo, las métricas son estables
   useEffect(() => {
-    // Simular actualizaciones en tiempo real
-    const interval = setInterval(() => {
-      setMetrics(prev => ({
-        tiempoRespuesta: Math.max(0.8, prev.tiempoRespuesta + (Math.random() - 0.5) * 0.2),
-        tasaExito: Math.max(85, Math.min(99, prev.tasaExito + (Math.random() - 0.5) * 0.5)),
-        usuariosConectados: Math.max(8, Math.min(20, prev.usuariosConectados + Math.floor((Math.random() - 0.5) * 3))),
-        certificadosHora: Math.max(30, Math.min(60, prev.certificadosHora + Math.floor((Math.random() - 0.5) * 5)))
-      }));
-
-      setTrends(prev => ({
-        tiempoRespuesta: Math.random() > 0.7 ? (Math.random() > 0.5 ? 'up' : 'down') : 'stable',
-        tasaExito: Math.random() > 0.6 ? 'up' : 'stable',
-        usuariosConectados: Math.random() > 0.5 ? 'up' : 'down',
-        certificadosHora: Math.random() > 0.4 ? 'up' : 'stable'
-      }));
-    }, 5000);
-
-    return () => clearInterval(interval);
+    setMetrics({
+      tiempoRespuesta: 0.0,
+      tasaExito: 0.0,
+      usuariosConectados: 1,
+      certificadosHora: 0
+    });
   }, []);
 
   const getTrendIcon = (trend) => {
@@ -81,12 +70,12 @@ const RealTimeMetrics = () => {
 
   return (
     <div className="card animate-fade-in-up">
-      <h3 className="text-lg font-semibold text-gray-900 mb-6">Métricas en Tiempo Real</h3>
+      <h3 className="text-lg font-semibold text-gray-900 mb-6">Métricas del Sistema</h3>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {metricsConfig.map((metric) => (
           <div
             key={metric.key}
-            className={`p-4 rounded-2xl bg-gradient-to-br from-${metric.color}-50 to-${metric.color}-100 border border-${metric.color}-200 text-center group hover:scale-105 transition-transform duration-300`}
+            className={`p-4 rounded-2xl bg-gradient-to-br from-${metric.color}-50 to-${metric.color}-100 border border-${metric.color}-200 text-center group transition-all duration-300`}
           >
             <div className="flex items-center justify-center space-x-1 mb-2">
               {getTrendIcon(metric.trend)}
@@ -98,8 +87,7 @@ const RealTimeMetrics = () => {
               {metric.value}
             </div>
             <div className={`text-xs text-${metric.color}-700 opacity-80`}>
-              {metric.trend === 'up' ? 'Mejorando' : 
-               metric.trend === 'down' ? 'En revisión' : 'Estable'}
+              Sistema nuevo
             </div>
           </div>
         ))}

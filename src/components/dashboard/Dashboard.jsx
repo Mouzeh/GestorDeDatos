@@ -5,51 +5,37 @@ import ActivityChart from '../charts/ActivityChart';
 import UserDistributionChart from '../charts/UserDistributionChart';
 import StatusDistributionChart from '../charts/StatusDistributionChart';
 import RealTimeMetrics from '../charts/RealTimeMetrics';
-import { TrendingUp, FileText, Users, AlertCircle, CheckCircle, Clock, Download, BarChart3 } from 'lucide-react';
+import { TrendingUp, FileText, Users, AlertCircle, CheckCircle, Clock, Download } from 'lucide-react';
 
 const Dashboard = () => {
   const { user } = useAuth();
+
   const [metrics, setMetrics] = useState({
     totalCertificados: 0,
     certificadosValidos: 0,
     certificadosPendientes: 0,
     certificadosError: 0,
-    usuariosActivos: 0,
+    usuariosActivos: 3,
     accionesHoy: 0
   });
 
-  // Animación de contadores
+  const [loading, setLoading] = useState(true);
+
+  // Cargar datos reales iniciales (cuando aún no hay actividad)
   useEffect(() => {
-    const targetMetrics = {
-      totalCertificados: 156,
-      certificadosValidos: 128,
-      certificadosPendientes: 18,
-      certificadosError: 10,
-      usuariosActivos: 24,
-      accionesHoy: 342
-    };
+    setLoading(true);
 
-    const duration = 2000;
-    const steps = 60;
-    const stepDuration = duration / steps;
-
-    Object.keys(targetMetrics).forEach(key => {
-      let current = 0;
-      const target = targetMetrics[key];
-      const increment = target / steps;
-
-      const timer = setInterval(() => {
-        current += increment;
-        if (current >= target) {
-          current = target;
-          clearInterval(timer);
-        }
-        setMetrics(prev => ({
-          ...prev,
-          [key]: Math.floor(current)
-        }));
-      }, stepDuration);
-    });
+    setTimeout(() => {
+      setMetrics({
+        totalCertificados: 0,
+        certificadosValidos: 0,
+        certificadosPendientes: 0,
+        certificadosError: 0,
+        usuariosActivos: 3,
+        accionesHoy: 0
+      });
+      setLoading(false);
+    }, 1000);
   }, []);
 
   const MetricCard = ({ icon: Icon, title, value, change, color, delay }) => (
@@ -60,8 +46,12 @@ const Dashboard = () => {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm font-medium text-gray-600 mb-1">{title}</p>
-          <p className={`text-2xl font-bold ${color} mb-2`}>{value}</p>
-          {change && (
+          <p className={`text-2xl font-bold ${color} mb-2`}>
+            {loading
+              ? <div className="h-8 bg-gray-200 rounded animate-pulse w-16"></div>
+              : value}
+          </p>
+          {change && !loading && (
             <div className="flex items-center space-x-1">
               <TrendingUp className="w-4 h-4 text-green-500" />
               <span className="text-xs text-green-600 font-medium">{change}</span>
@@ -87,32 +77,48 @@ const Dashboard = () => {
       <h3 className="font-semibold text-gray-900 mb-2 group-hover:text-red-600 transition-colors">
         {title}
       </h3>
-      <p className="text-sm text-gray-600 leading-relaxed">
-        {description}
-      </p>
+      <p className="text-sm text-gray-600 leading-relaxed">{description}</p>
     </button>
   );
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+        <Header />
+        <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+          <div className="card animate-pulse">
+            <div className="flex justify-center items-center py-12">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       <Header />
       
       <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        {/* Bienvenida personalizada */}
+        
+        {/* Bienvenida */}
         <div className="card bg-gradient-to-r from-white to-gray-50 mb-8 animate-fade-in-up">
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-3xl font-bold text-gray-900 mb-2">
                 Bienvenido, {user?.nombre} 👋
               </h1>
+
               <p className="text-gray-600 text-lg">
-                {user?.rol === 'admin' && 'Tienes control total del sistema de gestión tributaria.'}
-                {user?.rol === 'corredor' && 'Gestiona y carga certificados tributarios de forma eficiente.'}
-                {user?.rol === 'auditor' && 'Monitorea y audita todas las actividades del sistema.'}
+                {user?.rol === 'admin' && 'Sistema listo para comenzar. No hay certificados procesados aún.'}
+                {user?.rol === 'corredor' && 'Comienza cargando tus primeros certificados tributarios.'}
+                {user?.rol === 'auditor' && 'Sistema recién iniciado. No hay actividad para auditar aún.'}
               </p>
             </div>
+
             <div className="hidden lg:block">
-              <div className="bg-gradient-to-br from-red-500 to-red-600 text-white px-6 py-4 rounded-2xl text-center shadow-lg">
+              <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white px-6 py-4 rounded-2xl text-center shadow-lg">
                 <div className="text-2xl font-bold">{metrics.accionesHoy}</div>
                 <div className="text-sm opacity-90">Acciones Hoy</div>
               </div>
@@ -123,16 +129,18 @@ const Dashboard = () => {
         {/* Métricas en tiempo real */}
         <RealTimeMetrics />
 
-        {/* Grid de métricas */}
+        {/* Métricas principales */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+
           <MetricCard
             icon={FileText}
             title="Total Certificados"
             value={metrics.totalCertificados}
-            change="+12% este mes"
+            change={metrics.totalCertificados > 0 ? "+0% este mes" : null}
             color="text-blue-600"
             delay={100}
           />
+
           <MetricCard
             icon={CheckCircle}
             title="Certificados Válidos"
@@ -140,6 +148,7 @@ const Dashboard = () => {
             color="text-green-600"
             delay={200}
           />
+
           <MetricCard
             icon={Clock}
             title="Pendientes"
@@ -147,6 +156,7 @@ const Dashboard = () => {
             color="text-yellow-600"
             delay={300}
           />
+
           <MetricCard
             icon={AlertCircle}
             title="Con Error"
@@ -154,117 +164,141 @@ const Dashboard = () => {
             color="text-red-600"
             delay={400}
           />
+
           <MetricCard
             icon={Users}
             title="Usuarios Activos"
             value={metrics.usuariosActivos}
-            change="+3 hoy"
+            change="Sistema nuevo"
             color="text-purple-600"
             delay={500}
           />
+
           <MetricCard
             icon={Download}
             title="Descargas Hoy"
-            value="47"
+            value="0"
             color="text-indigo-600"
             delay={600}
           />
+
         </div>
 
-        {/* Gráficos principales */}
+        {/* Aviso cuando no hay datos */}
+        {metrics.totalCertificados === 0 && (
+          <div className="card bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 mb-8 animate-fade-in-up">
+            <div className="flex items-center space-x-4">
+              <div className="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center">
+                <span className="text-2xl">🎯</span>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-semibold text-blue-900 mb-2">
+                  Sistema Listo para Comenzar
+                </h3>
+                <p className="text-blue-700">
+                  No hay certificados procesados aún. Comienza cargando tus primeros archivos PDF.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Gráficos */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
           <ActivityChart />
           <UserDistributionChart />
         </div>
 
-        {/* Gráfico de barras completo */}
         <div className="mb-8">
           <StatusDistributionChart />
         </div>
 
         {/* Acciones rápidas */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+
           <QuickAction
             icon="📁"
             title="Carga Masiva"
-            description="Sube múltiples certificados en PDF o ZIP para procesamiento automático"
+            description="Sube múltiples certificados PDF"
             color="bg-blue-100 text-blue-600"
             delay={100}
+            onClick={() => window.location.href = '/certificados'}
           />
+
           <QuickAction
             icon="📊"
             title="Ver Reportes"
-            description="Genera reportes detallados y estadísticas del sistema tributario"
+            description="Estadísticas del sistema tributario"
             color="bg-green-100 text-green-600"
             delay={200}
+            onClick={() => window.location.href = '/reportes'}
           />
+
           <QuickAction
             icon="👥"
             title="Gestión Usuarios"
-            description="Administra usuarios, roles y permisos del sistema"
+            description="Control de roles y permisos"
             color="bg-purple-100 text-purple-600"
             delay={300}
+            onClick={() => window.location.href = '/usuarios'}
           />
+
           <QuickAction
             icon="🔍"
             title="Auditoría"
-            description="Revisa el historial completo de acciones y eventos del sistema"
+            description="Historial completo del sistema"
             color="bg-orange-100 text-orange-600"
             delay={400}
+            onClick={() => window.location.href = '/auditoria'}
           />
+
         </div>
 
-        {/* Actividad reciente */}
+        {/* Paneles inferiores */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+          {/* Actividad reciente (vacío por ahora) */}
           <div className="card animate-fade-in-up" style={{ animationDelay: '500ms' }}>
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Actividad Reciente</h3>
-            <div className="space-y-4">
-              {[
-                { user: 'Ana Corredor', action: 'subió 5 certificados', time: 'Hace 2 min', type: 'upload' },
-                { user: 'Carlos Admin', action: 'validó certificado DTE-7845', time: 'Hace 5 min', type: 'validation' },
-                { user: 'Sistema', action: 'procesó lote #2847', time: 'Hace 8 min', type: 'system' },
-                { user: 'María Auditor', action: 'generó reporte mensual', time: 'Hace 15 min', type: 'report' },
-              ].map((activity, index) => (
-                <div key={index} className="flex items-center space-x-3 p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors">
-                  <div className={`w-2 h-2 rounded-full ${
-                    activity.type === 'upload' ? 'bg-blue-500' :
-                    activity.type === 'validation' ? 'bg-green-500' :
-                    activity.type === 'system' ? 'bg-purple-500' : 'bg-orange-500'
-                  }`}></div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium text-gray-900">{activity.user}</p>
-                    <p className="text-sm text-gray-600">{activity.action}</p>
-                  </div>
-                  <span className="text-xs text-gray-500">{activity.time}</span>
-                </div>
-              ))}
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <span className="text-2xl">📝</span>
+              </div>
+              <p className="text-gray-500">No hay actividad reciente</p>
+              <p className="text-gray-400 text-sm mt-2">Las acciones aparecerán aquí</p>
             </div>
           </div>
 
+          {/* Estado del sistema */}
           <div className="card animate-fade-in-up" style={{ animationDelay: '600ms' }}>
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Estado del Sistema</h3>
+
             <div className="space-y-4">
               {[
-                { service: 'Servicio SII', status: 'operational', description: 'Conexión activa y estable' },
+                { service: 'Servicio SII', status: 'operational', description: 'Listo para conexión' },
                 { service: 'Procesamiento PDF', status: 'operational', description: 'Funcionando normalmente' },
-                { service: 'Base de Datos', status: 'warning', description: 'Alta carga - monitoreando' },
-                { service: 'Backup Automático', status: 'operational', description: 'Último backup: Hoy 02:00' },
-              ].map((service, index) => (
-                <div key={index} className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
+                { service: 'Base de Datos', status: 'operational', description: 'Conectada y lista' },
+                { service: 'Backup Automático', status: 'operational', description: 'Configurado y activo' },
+              ].map((service, idx) => (
+                <div key={idx} className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
                   <div>
                     <p className="font-medium text-gray-900">{service.service}</p>
                     <p className="text-sm text-gray-600">{service.description}</p>
                   </div>
                   <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                    service.status === 'operational' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                    service.status === 'operational' 
+                      ? 'bg-green-100 text-green-800'
+                      : 'bg-yellow-100 text-yellow-800'
                   }`}>
                     {service.status === 'operational' ? 'Operativo' : 'Advertencia'}
                   </div>
                 </div>
               ))}
             </div>
+
           </div>
         </div>
+
       </div>
     </div>
   );

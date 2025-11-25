@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { certificatesService } from '../../services/supabase/certificates';
 import { Upload, File, X, CheckCircle, AlertCircle, Cloud, Zap, Shield } from 'lucide-react';
 
 const CertificateUpload = () => {
@@ -8,7 +9,9 @@ const CertificateUpload = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({});
   const [uploadResults, setUploadResults] = useState([]);
+  const [isUploading, setIsUploading] = useState(false);
 
+  // ----- DRAG & DROP -----
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
     setIsDragging(true);
@@ -43,43 +46,64 @@ const CertificateUpload = () => {
     setFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  const simulateUpload = async (file, index) => {
-    return new Promise((resolve) => {
-      let progress = 0;
-      const interval = setInterval(() => {
-        progress += Math.random() * 20;
-        if (progress >= 100) {
-          progress = 100;
-          clearInterval(interval);
-          
-          // Simular resultado aleatorio
-          const isSuccess = Math.random() > 0.3;
-          resolve({
-            fileName: file.name,
-            success: isSuccess,
-            message: isSuccess ? 'Certificado procesado correctamente' : 'Error en validación del PDF',
-            timestamp: new Date().toLocaleString(),
-            size: file.size
-          });
-        }
-        setUploadProgress(prev => ({ ...prev, [index]: progress }));
-      }, 200);
-    });
-  };
+  // --------------------------------------------------------------------
+  // 🚀 SUBIDA REAL A SUPABASE
+  // --------------------------------------------------------------------
 
   const handleUpload = async () => {
     if (files.length === 0) return;
 
+    setIsUploading(true);
     const results = [];
+
     for (let i = 0; i < files.length; i++) {
-      const result = await simulateUpload(files[i], i);
-      results.push(result);
+      const file = files[i];
+
+      // Mostrar progreso inicial
+      setUploadProgress(prev => ({ ...prev, [i]: 50 }));
+
+      try {
+        // ---- SUBIDA REAL ----
+        const result = await certificatesService.uploadCertificate(file, user.id);
+
+        setUploadProgress(prev => ({ ...prev, [i]: 100 }));
+
+        results.push({
+          fileName: file.name,
+          success: result.success,
+          message: result.success ? 'Subido correctamente a Supabase' : result.error,
+          timestamp: new Date().toLocaleString(),
+          size: file.size,
+          certificateId: result?.certificate?.id
+        });
+
+        await new Promise(resolve => setTimeout(resolve, 400));
+
+      } catch (error) {
+        results.push({
+          fileName: file.name,
+          success: false,
+          message: `Error: ${error.message}`,
+          timestamp: new Date().toLocaleString(),
+          size: file.size
+        });
+      }
     }
-    
+
     setUploadResults(results);
     setFiles([]);
     setUploadProgress({});
+    setIsUploading(false);
+
+    // 🔄 Actualizar lista de certificados en otro componente
+    if (typeof window.updateCertificateList === 'function') {
+      window.updateCertificateList();
+    }
   };
+
+  // --------------------------------------------------------------------
+  // UI (se mantiene igual)
+  // --------------------------------------------------------------------
 
   return (
     <div className="space-y-6 animate-fade-in-up">
@@ -96,7 +120,7 @@ const CertificateUpload = () => {
         </div>
       </div>
 
-      {/* Área de Drag & Drop mejorada */}
+      {/* Área de Drag & Drop */}
       <div
         className={`border-3 border-dashed rounded-2xl p-12 text-center transition-all duration-500 ${
           isDragging 
@@ -117,17 +141,6 @@ const CertificateUpload = () => {
           Suelta los archivos PDF para comenzar la carga masiva automática
         </p>
         
-        <div className="flex items-center justify-center space-x-4 mb-4">
-          <div className="flex items-center space-x-2 text-sm text-gray-500">
-            <Shield className="w-4 h-4" />
-            <span>Procesamiento seguro</span>
-          </div>
-          <div className="flex items-center space-x-2 text-sm text-gray-500">
-            <Zap className="w-4 h-4" />
-            <span>Validación automática</span>
-          </div>
-        </div>
-        
         <input
           type="file"
           multiple
@@ -143,41 +156,21 @@ const CertificateUpload = () => {
           <Upload className="w-5 h-5" />
           <span>Seleccionar Archivos PDF</span>
         </label>
-        <p className="text-sm text-gray-400 mt-4">
-          Máximo 10 archivos • Solo formato PDF • Tamaño máximo 50MB por archivo
-        </p>
       </div>
 
-      {/* Lista de archivos seleccionados - Mejorada */}
+      {/* Lista de archivos */}
       {files.length > 0 && (
         <div className="card animate-fade-in-up">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h3 className="text-xl font-semibold text-gray-900">
-                Archivos a Procesar
-              </h3>
-              <p className="text-gray-600">{files.length} archivos seleccionados</p>
-            </div>
-            <div className="bg-green-100 text-green-800 px-4 py-2 rounded-xl font-semibold">
-              Listo para subir
-            </div>
-          </div>
-          
           <div className="space-y-4">
             {files.map((file, index) => (
               <div
                 key={index}
-                className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl hover:bg-gray-100 transition-all duration-300 group"
+                className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl"
               >
                 <div className="flex items-center space-x-4">
-                  <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                    <File className="w-6 h-6 text-blue-600" />
-                  </div>
+                  <File className="w-6 h-6 text-blue-600" />
                   <div>
                     <p className="font-semibold text-gray-900">{file.name}</p>
-                    <p className="text-sm text-gray-500">
-                      {(file.size / 1024 / 1024).toFixed(2)} MB • PDF Document
-                    </p>
                   </div>
                 </div>
                 
@@ -185,14 +178,14 @@ const CertificateUpload = () => {
                   {uploadProgress[index] !== undefined && (
                     <div className="w-32 bg-gray-200 rounded-full h-3">
                       <div
-                        className="bg-gradient-to-r from-red-500 to-red-600 h-3 rounded-full transition-all duration-500 shadow-glow"
+                        className="bg-gradient-to-r from-red-500 to-red-600 h-3 rounded-full transition-all duration-500"
                         style={{ width: `${uploadProgress[index]}%` }}
                       ></div>
                     </div>
                   )}
                   <button
                     onClick={() => removeFile(index)}
-                    className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all duration-300"
+                    className="p-2 text-gray-400 hover:text-red-500"
                   >
                     <X className="w-5 h-5" />
                   </button>
@@ -200,55 +193,31 @@ const CertificateUpload = () => {
               </div>
             ))}
           </div>
-          
-          <div className="flex justify-end space-x-4 mt-6 pt-6 border-t border-gray-200">
-            <button
-              onClick={() => setFiles([])}
-              className="btn-secondary"
-            >
-              Cancelar Todo
-            </button>
+
+          <div className="flex justify-end mt-6">
             <button
               onClick={handleUpload}
+              disabled={isUploading}
               className="btn-primary flex items-center space-x-2"
-              disabled={Object.keys(uploadProgress).length > 0}
             >
               <Cloud className="w-5 h-5" />
-              <span>Iniciar Procesamiento</span>
+              <span>{isUploading ? 'Subiendo...' : 'Iniciar Procesamiento'}</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* Resultados de la carga - Mejorados */}
+      {/* Resultados */}
       {uploadResults.length > 0 && (
         <div className="card animate-fade-in-up">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h3 className="text-xl font-semibold text-gray-900">
-                Resultados del Procesamiento
-              </h3>
-              <p className="text-gray-600">
-                {uploadResults.filter(r => r.success).length} de {uploadResults.length} archivos procesados correctamente
-              </p>
-            </div>
-            <div className={`px-4 py-2 rounded-xl font-semibold ${
-              uploadResults.filter(r => r.success).length === uploadResults.length 
-                ? 'bg-green-100 text-green-800' 
-                : 'bg-yellow-100 text-yellow-800'
-            }`}>
-              {uploadResults.filter(r => r.success).length === uploadResults.length ? 'Completado' : 'Revisar Errores'}
-            </div>
-          </div>
+          <h3 className="text-xl font-semibold mb-4">Resultados del Procesamiento</h3>
 
           <div className="space-y-3">
             {uploadResults.map((result, index) => (
               <div
                 key={index}
-                className={`flex items-center space-x-4 p-4 rounded-2xl border-2 transition-all duration-300 ${
-                  result.success 
-                    ? 'bg-green-50 border-green-200 hover:border-green-300' 
-                    : 'bg-red-50 border-red-200 hover:border-red-300'
+                className={`flex items-center space-x-4 p-4 rounded-2xl border-2 ${
+                  result.success ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
                 }`}
               >
                 <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
@@ -260,70 +229,21 @@ const CertificateUpload = () => {
                     <AlertCircle className="w-6 h-6 text-red-600" />
                   )}
                 </div>
-                
+
                 <div className="flex-1">
-                  <p className={`font-semibold ${
-                    result.success ? 'text-green-800' : 'text-red-800'
-                  }`}>
-                    {result.fileName}
-                  </p>
-                  <p className={`text-sm ${
-                    result.success ? 'text-green-600' : 'text-red-600'
-                  }`}>
-                    {result.message}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {result.timestamp} • {(result.size / 1024 / 1024).toFixed(2)} MB
-                  </p>
-                </div>
-                
-                <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                  result.success 
-                    ? 'bg-green-200 text-green-800' 
-                    : 'bg-red-200 text-red-800'
-                }`}>
-                  {result.success ? 'Éxito' : 'Error'}
+                  <p className="font-semibold">{result.fileName}</p>
+                  <p className="text-sm">{result.message}</p>
                 </div>
               </div>
             ))}
           </div>
-          
-          <div className="flex justify-end mt-6 pt-6 border-t border-gray-200">
-            <button
-              onClick={() => setUploadResults([])}
-              className="btn-secondary"
-            >
-              Cerrar Reporte
-            </button>
-          </div>
-        </div>
-      )}
 
-      {/* Métricas de carga */}
-      {(files.length > 0 || uploadResults.length > 0) && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="card text-center">
-            <div className="text-2xl font-bold text-blue-600">{files.length}</div>
-            <div className="text-sm text-gray-600">En cola</div>
-          </div>
-          <div className="card text-center">
-            <div className="text-2xl font-bold text-yellow-600">
-              {Object.keys(uploadProgress).length}
-            </div>
-            <div className="text-sm text-gray-600">Procesando</div>
-          </div>
-          <div className="card text-center">
-            <div className="text-2xl font-bold text-green-600">
-              {uploadResults.filter(r => r.success).length}
-            </div>
-            <div className="text-sm text-gray-600">Completados</div>
-          </div>
-          <div className="card text-center">
-            <div className="text-2xl font-bold text-red-600">
-              {uploadResults.filter(r => !r.success).length}
-            </div>
-            <div className="text-sm text-gray-600">Con error</div>
-          </div>
+          <button
+            onClick={() => setUploadResults([])}
+            className="btn-secondary mt-6"
+          >
+            Cerrar Reporte
+          </button>
         </div>
       )}
     </div>
