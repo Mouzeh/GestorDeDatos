@@ -2,75 +2,145 @@ import { supabase } from '../../config/supabase'
 
 export const certificatesService = {
   // ==========================================================
-  // 1. SUBIR CERTIFICADO REAL - CORREGIDO
+  // 1. SUBIR CERTIFICADO - VERSIÓN ULTRA CORREGIDA
   // ==========================================================
-  async uploadCertificate(file, userId) {
+  async uploadCertificate(file) {
     try {
-      console.log('📤 Iniciando subida de archivo para usuario:', userId)
+      console.log('🚀 [CERTIFICATES] Iniciando subida...');
 
-      // 🔥 VERIFICAR USUARIO AUTENTICADO PRIMERO
-      const { data: { user: authUser }, error: authError } = await supabase.auth.getUser()
+      // 🔥 PASO 1: VERIFICAR SESIÓN DE FORMA SEGURA
+      console.log('🔐 Verificando sesión...');
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       
-      if (authError || !authUser) {
-        throw new Error('Usuario no autenticado: ' + authError?.message)
+      if (sessionError) {
+        console.error('❌ Error de sesión:', sessionError);
+        throw new Error('Error de autenticación: ' + sessionError.message);
       }
 
-      console.log('🔐 Usuario autenticado:', authUser.id)
-      console.log('🆔 Comparación IDs - userId:', userId, 'auth.uid():', authUser.id)
+      if (!session || !session.user) {
+        console.error('❌ No hay sesión activa');
+        throw new Error('No hay sesión activa. Por favor, recarga la página e inicia sesión nuevamente.');
+      }
 
-      // 🔥 USAR SIEMPRE EL ID DEL USUARIO AUTENTICADO (para evitar problemas RLS)
-      const effectiveUserId = authUser.id
+      const user = session.user;
+      console.log('✅ Sesión activa:', user.email, 'ID:', user.id);
 
-      // Generar nombre único
-      const fileExt = file.name.split('.').pop()
-      const fileName = `${effectiveUserId}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`
+      // 🔥 PASO 2: VERIFICAR QUE EL USUARIO EXISTE EN LA BD
+      console.log('🔍 Verificando usuario en base de datos...');
+      const { data: userProfile, error: profileError } = await supabase
+        .from('usuarios')
+        .select(`
+          id,
+          nombre,
+          roles:rol_id (
+            id,
+            nombre_rol,
+            permisos
+          )
+        `)
+        .eq('id', user.id)
+        .single();
 
-      console.log('📁 Subiendo a:', fileName)
+      if (profileError) {
+        console.error('❌ Error al verificar perfil:', profileError);
+        throw new Error('Tu usuario no está registrado en el sistema. Contacta al administrador.');
+      }
 
-      // Subida al Storage
+      if (!userProfile) {
+        throw new Error('Usuario no encontrado en la base de datos.');
+      }
+
+      console.log('✅ Usuario verificado:', userProfile.nombre, '- Rol:', userProfile.roles?.nombre_rol);
+
+      // 🔥 PASO 3: PREPARAR DATOS PARA INSERCIÓN
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${user.id}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+
+      console.log('📁 Preparando archivo:', {
+        nombre: file.name,
+        destino: fileName,
+        tamaño: (file.size / 1024 / 1024).toFixed(2) + ' MB',
+        tipo: file.type
+      });
+
+      // 🔥 PASO 4: SUBIR A STORAGE
+      console.log('☁️ Subiendo a Supabase Storage...');
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from('certificados')
-        .upload(fileName, file)
+        .upload(fileName, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
 
       if (uploadError) {
-        console.error('❌ Error subiendo archivo:', uploadError)
-        throw new Error(`Error al subir archivo: ${uploadError.message}`)
+        console.error('❌ Error en storage:', uploadError);
+        
+        // Manejar errores específicos de storage
+        if (uploadError.message?.includes('bucket')) {
+          throw new Error('Error de configuración del almacenamiento. Contacta al administrador.');
+        }
+        if (uploadError.message?.includes('exists')) {
+          throw new Error('El archivo ya existe. Por favor, cambia el nombre del archivo.');
+        }
+        
+        throw new Error(`Error al subir archivo: ${uploadError.message}`);
       }
 
-      console.log('✅ Archivo subido:', uploadData.path)
+      console.log('✅ Archivo subido exitosamente:', uploadData.path);
+
+      // 🔥 PASO 5: REGISTRAR EN BASE DE DATOS (CON MANEJO DE RLS)
+      const certificadoData = {
+        usuario_id: user.id,  // ← CLAVE: Usar el ID del usuario autenticado
+        nombre_archivo: file.name,
+        storage_key: uploadData.path,
+        tipo_archivo: file.type || 'application/pdf',
+        tamaño_bytes: file.size,
+        estado: 'pendiente',
+        fecha_carga: new Date().toISOString()
+      };
+
+      console.log('💾 Intentando insertar en BD:', certificadoData);
+
+      // Intentar inserción con manejo específico de errores RLS
+      const { data: certificate, error: dbError } = await supabase
+        .from('certificados_tributarios')
+        .insert(certificadoData)
+        .select(`
+          *,
+          usuarios:usuario_id (
+            nombre,
+            email,
+            roles:rol_id(nombre_rol)
+          )
+        `)
+        .single();
+
+      if (dbError) {
+        console.error('❌ Error en base de datos:', dbError);
+        
+        // REVERTIR: Eliminar archivo del storage
+        console.log('🔄 Revertiendo - eliminando archivo de storage...');
+        await supabase.storage.from('certificados').remove([uploadData.path]);
+        
+        // Manejar errores específicos
+        if (dbError.code === '42501') {
+          console.error('💥 ERROR RLS DETECTADO');
+          throw new Error('POLÍTICAS DE SEGURIDAD (RLS): No tienes permisos para realizar esta acción. Contacta al administrador.');
+        } else if (dbError.code === '23503') {
+          throw new Error('Error de referencia: El usuario no existe en la base de datos.');
+        } else if (dbError.code === '23505') {
+          throw new Error('El certificado ya existe en el sistema.');
+        } else {
+          throw new Error(`Error de base de datos: ${dbError.message} (Código: ${dbError.code})`);
+        }
+      }
+
+      console.log('🎉 CERTIFICADO CREADO EXITOSAMENTE:', certificate.id);
 
       // Obtener URL pública
       const { data: urlData } = supabase.storage
         .from('certificados')
-        .getPublicUrl(uploadData.path)
-
-      // 🔥 REGISTRAR EN BD USANDO EL ID DEL USUARIO AUTENTICADO
-      const { data: certificate, error: certError } = await supabase
-        .from('certificados_tributarios')
-        .insert({
-          usuario_id: effectiveUserId,  // ← ESTA ES LA CLAVE
-          nombre_archivo: file.name,
-          storage_key: uploadData.path,
-          tipo_archivo: file.type || 'application/pdf',
-          tamaño_bytes: file.size,
-          estado: 'pendiente',
-          fecha_carga: new Date().toISOString()
-        })
-        .select(`
-          *,
-          usuarios:usuario_id (nombre, email)
-        `)
-        .single()
-
-      if (certError) {
-        console.error('❌ Error creando registro:', certError)
-
-        // Revertir almacenamiento si falla la BD
-        await supabase.storage.from('certificados').remove([uploadData.path])
-        throw new Error(`Error al registrar certificado: ${certError.message}`)
-      }
-
-      console.log('✅ Certificado registrado en BD:', certificate.id)
+        .getPublicUrl(uploadData.path);
 
       return {
         success: true,
@@ -79,199 +149,140 @@ export const certificatesService = {
           url_descarga: urlData.publicUrl
         },
         message: 'Certificado subido y registrado correctamente'
-      }
+      };
 
     } catch (error) {
-      console.error('💥 Error en uploadCertificate:', error)
+      console.error('💥 ERROR CRÍTICO en uploadCertificate:', error);
       return {
         success: false,
         error: error.message
-      }
+      };
     }
   },
 
   // ==========================================================
-  // 2. LISTAR CERTIFICADOS - CORREGIDO PARA ROLES
+  // 2. LISTAR CERTIFICADOS
   // ==========================================================
-  async getCertificates(userId, filters = {}) {
+  async getCertificates(filters = {}) {
     try {
-      console.log('📋 Obteniendo certificados para usuario:', userId)
+      console.log('📋 Obteniendo certificados...');
+
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session?.user) {
+        throw new Error('No hay sesión activa');
+      }
 
       let query = supabase
         .from('certificados_tributarios')
         .select(`
           *,
-          usuarios:usuario_id (nombre, email)
+          usuarios:usuario_id (
+            nombre, 
+            email,
+            roles:rol_id(nombre_rol)
+          )
         `)
-        .order('fecha_carga', { ascending: false })
+        .order('fecha_carga', { ascending: false });
 
-      // 🔥 VERIFICAR ROL DEL USUARIO PARA FILTRAR
-      const { data: { user: authUser } } = await supabase.auth.getUser()
-      
-      if (authUser) {
-        // Obtener rol del usuario
-        const { data: userProfile } = await supabase
-          .from('usuarios')
-          .select('roles:rol_id(nombre_rol)')
-          .eq('id', authUser.id)
-          .single()
+      // Verificar rol para determinar filtros
+      const { data: userProfile } = await supabase
+        .from('usuarios')
+        .select('roles:rol_id(nombre_rol)')
+        .eq('id', session.user.id)
+        .single();
 
-        const userRole = userProfile?.roles?.nombre_rol
+      const userRole = userProfile?.roles?.nombre_rol;
 
-        console.log('🎭 Rol del usuario:', userRole)
-
-        // Solo filtrar por usuario si NO es admin o auditor
-        if (userRole !== 'admin' && userRole !== 'auditor') {
-          query = query.eq('usuario_id', authUser.id)
-          console.log('🔒 Filtrando solo certificados del usuario')
-        } else {
-          console.log('👑 Mostrando TODOS los certificados (admin/auditor)')
-        }
+      // Solo usuarios no-admin filtran por su ID
+      if (userRole !== 'admin' && userRole !== 'auditor') {
+        query = query.eq('usuario_id', session.user.id);
       }
 
-      // Filtros aplicables
-      if (filters.estado) query = query.eq('estado', filters.estado)
-      if (filters.fecha_desde) query = query.gte('fecha_carga', filters.fecha_desde)
-      if (filters.fecha_hasta) query = query.lte('fecha_carga', filters.fecha_hasta)
+      // Aplicar filtros
+      if (filters.estado) query = query.eq('estado', filters.estado);
+      if (filters.fecha_desde) query = query.gte('fecha_carga', filters.fecha_desde);
+      if (filters.fecha_hasta) query = query.lte('fecha_carga', filters.fecha_hasta);
 
-      const { data, error } = await query
+      const { data: certificates, error } = await query;
 
-      if (error) {
-        console.error('❌ Error obteniendo certificados:', error)
-        throw error
-      }
-
-      console.log(`✅ ${data.length} certificados encontrados`)
+      if (error) throw error;
 
       return {
         success: true,
-        certificates: data
-      }
+        certificates: certificates
+      };
 
     } catch (error) {
+      console.error('❌ Error en getCertificates:', error);
       return {
         success: false,
         error: error.message,
         certificates: []
-      }
+      };
     }
   },
 
   // ==========================================================
-  // 3. ACTUALIZAR ESTADO DEL CERTIFICADO
-  // ==========================================================
-  async updateCertificateStatus(certificateId, status, datosValidados = null) {
-    try {
-      const updates = {
-        estado: status,
-        actualizado_en: new Date().toISOString()
-      }
-
-      if (datosValidados) {
-        updates.datos_validados = datosValidados
-        updates.fecha_validacion = new Date().toISOString()
-      }
-
-      if (status === 'enviado_sii') {
-        updates.fecha_envio_sii = new Date().toISOString()
-      }
-
-      const { data, error } = await supabase
-        .from('certificados_tributarios')
-        .update(updates)
-        .eq('id', certificateId)
-        .select()
-        .single()
-
-      if (error) throw error
-
-      return {
-        success: true,
-        certificate: data
-      }
-
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message
-      }
-    }
-  },
-
-  // ==========================================================
-  // 4. DESCARGAR CERTIFICADO
+  // 3. DESCARGAR CERTIFICADO
   // ==========================================================
   async downloadCertificate(storageKey) {
     try {
       const { data, error } = await supabase.storage
         .from('certificados')
-        .download(storageKey)
+        .download(storageKey);
 
-      if (error) throw error
+      if (error) throw error;
 
       return {
         success: true,
         file: data
-      }
+      };
 
     } catch (error) {
       return {
         success: false,
         error: error.message
-      }
+      };
     }
   },
 
   // ==========================================================
-  // 5. ELIMINAR CERTIFICADO (Storage + BD)
+  // 4. ELIMINAR CERTIFICADO
   // ==========================================================
   async deleteCertificate(certificateId, storageKey) {
     try {
-      // 🔥 VERIFICAR PERMISOS ANTES DE ELIMINAR
-      const { data: { user: authUser } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession();
       
-      if (authUser) {
-        // Verificar que el certificado pertenece al usuario (a menos que sea admin)
-        const { data: certificado, error: certError } = await supabase
-          .from('certificados_tributarios')
-          .select('usuario_id, usuarios:usuario_id(roles:rol_id(nombre_rol))')
-          .eq('id', certificateId)
-          .single()
-
-        if (certError) throw certError
-
-        const userRole = certificado?.usuarios?.roles?.nombre_rol
-        
-        // Solo permitir eliminar si es el dueño o admin
-        if (certificado.usuario_id !== authUser.id && userRole !== 'admin') {
-          throw new Error('No tienes permisos para eliminar este certificado')
-        }
+      if (!session?.user) {
+        throw new Error('No hay sesión activa');
       }
 
-      // Eliminar archivo de storage
+      // Eliminar de storage
       const { error: storageError } = await supabase.storage
         .from('certificados')
-        .remove([storageKey])
+        .remove([storageKey]);
 
-      if (storageError) throw storageError
+      if (storageError) throw storageError;
 
-      // Eliminar registro de BD
+      // Eliminar de BD
       const { error: dbError } = await supabase
         .from('certificados_tributarios')
         .delete()
-        .eq('id', certificateId)
+        .eq('id', certificateId);
 
-      if (dbError) throw dbError
+      if (dbError) throw dbError;
 
       return {
         success: true,
         message: 'Certificado eliminado correctamente'
-      }
+      };
+
     } catch (error) {
       return {
         success: false,
         error: error.message
-      }
+      };
     }
   }
-}
+};
