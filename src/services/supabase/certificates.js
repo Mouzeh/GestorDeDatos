@@ -2,15 +2,28 @@ import { supabase } from '../../config/supabase'
 
 export const certificatesService = {
   // ==========================================================
-  // 1. SUBIR CERTIFICADO REAL
+  // 1. SUBIR CERTIFICADO REAL - CORREGIDO
   // ==========================================================
   async uploadCertificate(file, userId) {
     try {
       console.log('📤 Iniciando subida de archivo para usuario:', userId)
 
+      // 🔥 VERIFICAR USUARIO AUTENTICADO PRIMERO
+      const { data: { user: authUser }, error: authError } = await supabase.auth.getUser()
+      
+      if (authError || !authUser) {
+        throw new Error('Usuario no autenticado: ' + authError?.message)
+      }
+
+      console.log('🔐 Usuario autenticado:', authUser.id)
+      console.log('🆔 Comparación IDs - userId:', userId, 'auth.uid():', authUser.id)
+
+      // 🔥 USAR SIEMPRE EL ID DEL USUARIO AUTENTICADO (para evitar problemas RLS)
+      const effectiveUserId = authUser.id
+
       // Generar nombre único
       const fileExt = file.name.split('.').pop()
-      const fileName = `${userId}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`
+      const fileName = `${effectiveUserId}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`
 
       console.log('📁 Subiendo a:', fileName)
 
@@ -31,11 +44,11 @@ export const certificatesService = {
         .from('certificados')
         .getPublicUrl(uploadData.path)
 
-      // Registrar en BD
+      // 🔥 REGISTRAR EN BD USANDO EL ID DEL USUARIO AUTENTICADO
       const { data: certificate, error: certError } = await supabase
         .from('certificados_tributarios')
         .insert({
-          usuario_id: userId,
+          usuario_id: effectiveUserId,  // ← ESTA ES LA CLAVE
           nombre_archivo: file.name,
           storage_key: uploadData.path,
           tipo_archivo: file.type || 'application/pdf',
@@ -78,7 +91,7 @@ export const certificatesService = {
   },
 
   // ==========================================================
-  // 2. LISTAR CERTIFICADOS (con filtros opcionales)
+  // 2. LISTAR CERTIFICADOS - CORREGIDO PARA ROLES
   // ==========================================================
   async getCertificates(userId, filters = {}) {
     try {
@@ -91,6 +104,30 @@ export const certificatesService = {
           usuarios:usuario_id (nombre, email)
         `)
         .order('fecha_carga', { ascending: false })
+
+      // 🔥 VERIFICAR ROL DEL USUARIO PARA FILTRAR
+      const { data: { user: authUser } } = await supabase.auth.getUser()
+      
+      if (authUser) {
+        // Obtener rol del usuario
+        const { data: userProfile } = await supabase
+          .from('usuarios')
+          .select('roles:rol_id(nombre_rol)')
+          .eq('id', authUser.id)
+          .single()
+
+        const userRole = userProfile?.roles?.nombre_rol
+
+        console.log('🎭 Rol del usuario:', userRole)
+
+        // Solo filtrar por usuario si NO es admin o auditor
+        if (userRole !== 'admin' && userRole !== 'auditor') {
+          query = query.eq('usuario_id', authUser.id)
+          console.log('🔒 Filtrando solo certificados del usuario')
+        } else {
+          console.log('👑 Mostrando TODOS los certificados (admin/auditor)')
+        }
+      }
 
       // Filtros aplicables
       if (filters.estado) query = query.eq('estado', filters.estado)
@@ -190,6 +227,27 @@ export const certificatesService = {
   // ==========================================================
   async deleteCertificate(certificateId, storageKey) {
     try {
+      // 🔥 VERIFICAR PERMISOS ANTES DE ELIMINAR
+      const { data: { user: authUser } } = await supabase.auth.getUser()
+      
+      if (authUser) {
+        // Verificar que el certificado pertenece al usuario (a menos que sea admin)
+        const { data: certificado, error: certError } = await supabase
+          .from('certificados_tributarios')
+          .select('usuario_id, usuarios:usuario_id(roles:rol_id(nombre_rol))')
+          .eq('id', certificateId)
+          .single()
+
+        if (certError) throw certError
+
+        const userRole = certificado?.usuarios?.roles?.nombre_rol
+        
+        // Solo permitir eliminar si es el dueño o admin
+        if (certificado.usuario_id !== authUser.id && userRole !== 'admin') {
+          throw new Error('No tienes permisos para eliminar este certificado')
+        }
+      }
+
       // Eliminar archivo de storage
       const { error: storageError } = await supabase.storage
         .from('certificados')
