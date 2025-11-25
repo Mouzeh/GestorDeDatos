@@ -1,14 +1,32 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from '@supabase/supabase-js';
 
-// TUS CREDENCIALES REALES
-const supabaseUrl = 'https://giyrxqaqmgsclaucptli.supabase.co'
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdpeXJ4cWFxbWdzY2xhdWNwdGxpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwODE0OTcsImV4cCI6MjA3OTY1NzQ5N30.QcU32seWTfY2wNdbNsd7NQ1RG9EXYWxLLPNRtZ9Sm4E'
+const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
+const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY;
 
-console.log('🔗 Conectando a Supabase:', supabaseUrl)
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error('❌ Faltan variables de entorno de Supabase');
+  throw new Error('Configuración de Supabase incompleta. Verifica tu archivo .env');
+}
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    persistSession: true,
     autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true
   }
-})
+});
+
+// Función de prueba de conexión
+export const testSupabaseConnection = async () => {
+  try {
+    const { data, error } = await supabase.from('roles').select('count').single();
+    
+    if (error) throw error;
+    
+    console.log('✅ Conexión a Supabase exitosa');
+    return true;
+  } catch (error) {
+    console.error('❌ Error de conexión a Supabase:', error);
+    return false;
+  }
+};
