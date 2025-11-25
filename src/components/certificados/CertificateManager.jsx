@@ -8,13 +8,21 @@ const CertificateManager = () => {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('upload');
 
+  // 🔍 DEBUG: Ver el rol del usuario
+  console.log('🔍 Usuario:', user);
+  console.log('🔍 Rol:', user?.rol);
+
   // Tabs actualizadas al nuevo diseño
   const tabs = [
     { id: 'upload', name: '📁 Carga Masiva', roles: ['admin', 'corredor'] },
     { id: 'list', name: '📊 Gestión', roles: ['admin', 'corredor', 'auditor'] },
   ];
 
-  const filteredTabs = tabs.filter(tab => tab.roles.includes(user?.rol));
+  // ✅ TEMPORAL: Mostrar todas las tabs sin filtrar
+  const filteredTabs = tabs; // ← QUITADO EL FILTRO TEMPORALMENTE
+
+  console.log('🔍 Tabs disponibles:', tabs);
+  console.log('🔍 Tabs filtradas:', filteredTabs);
 
   return (
     <div className="min-h-screen bg-gray-50">

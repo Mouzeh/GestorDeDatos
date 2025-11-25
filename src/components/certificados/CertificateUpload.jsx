@@ -33,17 +33,19 @@ const certificatesServiceUrgent = {
         console.log('ℹ️ Bucket ya existe o no se pudo verificar');
       }
 
-      // 3. Subir archivo con FETCH (bypass RLS)
+      // 3. Subir archivo (bypass RLS con FETCH)
       const fileName = `${user.id}/${Date.now()}-${file.name}`;
       const formData = new FormData();
       formData.append('file', file);
+
+      const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
 
       const uploadResp = await fetch(
         `${supabaseUrl}/storage/v1/object/certificados/${fileName}`,
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
+            'Authorization': `Bearer ${sessionToken}`,
             'apikey': supabaseAnonKey
           },
           body: formData
@@ -58,7 +60,7 @@ const certificatesServiceUrgent = {
       const uploadData = await uploadResp.json();
       console.log('📁 Archivo subido:', uploadData);
 
-      // 4. Insertar en BD con FETCH (bypass RLS)
+      // 4. Registrar en BD (bypass RLS con FETCH)
       const certificadoData = {
         usuario_id: user.id,
         nombre_archivo: file.name,
@@ -75,7 +77,7 @@ const certificatesServiceUrgent = {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
+            'Authorization': `Bearer ${sessionToken}`,
             'apikey': supabaseAnonKey,
             'Prefer': 'return=representation'
           },
@@ -101,7 +103,7 @@ const certificatesServiceUrgent = {
 };
 
 /* -----------------------------------------------------------
-🔥 COMPONENTE CertificateUpload
+🔥 COMPONENTE CertificateUpload COMPLETO
 ------------------------------------------------------------ */
 const CertificateUpload = () => {
   const { user } = useAuth();
@@ -149,31 +151,43 @@ const CertificateUpload = () => {
     setFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  /* --------------------------- Subida ---------------------------- */
+  /* --------------------------- SUBIDA REAL ---------------------------- */
   const handleUpload = async () => {
-    if (!service || files.length === 0) return;
+    if (files.length === 0 || !service) return;
 
     setIsUploading(true);
     const results = [];
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-
       setUploadProgress(prev => ({ ...prev, [i]: 50 }));
 
-      const result = await service.uploadCertificate(file);
+      try {
+        console.log('🚀 Subiendo archivo urgente...');
+        const result = await service.uploadCertificate(file);
 
-      setUploadProgress(prev => ({ ...prev, [i]: 100 }));
+        setUploadProgress(prev => ({ ...prev, [i]: 100 }));
 
-      results.push({
-        fileName: file.name,
-        success: result.success,
-        message: result.success ? 'Subido correctamente' : result.error,
-        certificateId: result?.certificate?.id,
-        timestamp: new Date().toLocaleString()
-      });
+        results.push({
+          fileName: file.name,
+          success: result.success,
+          message: result.success ? '✅ Subido correctamente' : `❌ ${result.error}`,
+          certificateId: result?.certificate?.id,
+          timestamp: new Date().toLocaleString(),
+          size: file.size
+        });
 
-      await new Promise(res => setTimeout(res, 300));
+        await new Promise(res => setTimeout(res, 400));
+
+      } catch (error) {
+        results.push({
+          fileName: file.name,
+          success: false,
+          message: `❌ Error: ${error.message}`,
+          timestamp: new Date().toLocaleString(),
+          size: file.size
+        });
+      }
     }
 
     setUploadResults(results);
@@ -181,8 +195,15 @@ const CertificateUpload = () => {
     setUploadProgress({});
     setIsUploading(false);
 
+    /* -----------------------------------------------------------
+    🔥 REFRESCAR LISTA DE CERTIFICADOS
+    ------------------------------------------------------------ */
     if (typeof window.updateCertificateList === 'function') {
+      console.log('🔄 Actualizando lista de certificados...');
       window.updateCertificateList();
+    } else {
+      console.log('⚠️ updateCertificateList no encontrado, recargando página...');
+      setTimeout(() => window.location.reload(), 2000);
     }
   };
 
