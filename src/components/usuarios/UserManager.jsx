@@ -1,7 +1,9 @@
+// src/components/usuarios/UserManager.jsx
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import Header from '../ui/Header';
-import { Users, UserPlus, Search, Filter, Edit3, Trash2, Shield, Mail, User, CheckCircle, XCircle, MoreVertical } from 'lucide-react';
+import UserForm from './UserForm'; // ← IMPORT DEL NUEVO COMPONENTE
+import { Users, UserPlus, Search, Filter, Edit3, Trash2, Shield, Mail, User, CheckCircle, XCircle } from 'lucide-react';
 
 const UserManager = () => {
   const { user: currentUser } = useAuth();
@@ -48,28 +50,6 @@ const UserManager = () => {
       ultimoAcceso: '2024-01-15 10:05:44',
       fechaRegistro: '2024-01-03',
       avatar: 'MA'
-    },
-    {
-      id: 4,
-      nombre: 'Carlos Supervisor',
-      email: 'carlos@inacap.cl',
-      rol: 'admin',
-      estado: 'suspendido',
-      mfaHabilitado: false,
-      ultimoAcceso: '2024-01-14 16:20:33',
-      fechaRegistro: '2024-01-04',
-      avatar: 'CS'
-    },
-    {
-      id: 5,
-      nombre: 'Ana Gestora',
-      email: 'ana@inacap.cl',
-      rol: 'corredor',
-      estado: 'activo',
-      mfaHabilitado: true,
-      ultimoAcceso: '2024-01-15 11:45:18',
-      fechaRegistro: '2024-01-05',
-      avatar: 'AG'
     }
   ];
 
@@ -85,7 +65,6 @@ const UserManager = () => {
   useEffect(() => {
     let filtered = users;
     
-    // Filtrar por búsqueda
     if (searchTerm) {
       filtered = filtered.filter(user => 
         user.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -93,12 +72,10 @@ const UserManager = () => {
       );
     }
     
-    // Filtrar por rol
     if (roleFilter !== 'all') {
       filtered = filtered.filter(user => user.rol === roleFilter);
     }
     
-    // Filtrar por estado
     if (statusFilter !== 'all') {
       filtered = filtered.filter(user => user.estado === statusFilter);
     }
@@ -160,26 +137,65 @@ const UserManager = () => {
     }
   };
 
-  const handleSaveUser = (userData) => {
-    if (editingUser) {
-      // Editar usuario existente
-      setUsers(prev => prev.map(u => 
-        u.id === editingUser.id ? { ...u, ...userData } : u
-      ));
-    } else {
-      // Crear nuevo usuario
-      const newUser = {
-        id: Math.max(...users.map(u => u.id)) + 1,
-        ...userData,
-        avatar: userData.nombre.split(' ').map(n => n[0]).join(''),
-        fechaRegistro: new Date().toISOString().split('T')[0],
-        ultimoAcceso: 'Nunca'
-      };
-      setUsers(prev => [...prev, newUser]);
+  const handleSaveUser = async (userData) => {
+    try {
+      console.log('💾 Guardando usuario:', userData);
+
+      if (editingUser) {
+        // ✅ EDITAR USUARIO EXISTENTE
+        console.log('📝 Actualizando usuario existente...');
+        
+        // Aquí llamarías al servicio de actualización
+        // const result = await usersService.updateUser(editingUser.id, userData);
+        
+        // Por ahora, actualización local
+        setUsers(prev => prev.map(u => 
+          u.id === editingUser.id ? { ...u, ...userData } : u
+        ));
+        
+        alert('✅ Usuario actualizado correctamente');
+      } else {
+        // ✅ CREAR NUEVO USUARIO (con contraseña)
+        console.log('🆕 Creando nuevo usuario con contraseña...');
+        
+        if (!userData.password) {
+          alert('❌ Error: La contraseña es requerida para usuarios nuevos');
+          return;
+        }
+
+        // Importar el servicio de usuarios
+        const { usersService } = await import('../../services/supabase/users');
+        
+        const result = await usersService.createUser(userData);
+        
+        if (result.success) {
+          console.log('✅ Usuario creado exitosamente:', result.user);
+          
+          // Agregar a la lista local
+          const newUser = {
+            ...result.user,
+            avatar: userData.nombre.split(' ').map(n => n[0]).join(''),
+            fechaRegistro: new Date().toISOString().split('T')[0],
+            ultimoAcceso: 'Nunca'
+          };
+          
+          setUsers(prev => [...prev, newUser]);
+          alert('✅ Usuario creado exitosamente');
+        } else {
+          console.error('❌ Error creando usuario:', result.error);
+          alert(`❌ Error al crear usuario: ${result.error}`);
+          return; // No cerrar el formulario si hay error
+        }
+      }
+      
+      // Solo cerrar si todo salió bien
+      setShowUserForm(false);
+      setEditingUser(null);
+      
+    } catch (error) {
+      console.error('💥 Error en handleSaveUser:', error);
+      alert(`❌ Error: ${error.message}`);
     }
-    
-    setShowUserForm(false);
-    setEditingUser(null);
   };
 
   if (loading) {
@@ -203,6 +219,7 @@ const UserManager = () => {
       
       <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
         <div className="card animate-fade-in-up">
+          
           {/* Header del módulo */}
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-8">
             <div>
@@ -383,142 +400,6 @@ const UserManager = () => {
           }}
         />
       )}
-    </div>
-  );
-};
-
-// Componente de formulario de usuario
-const UserForm = ({ user, onSave, onCancel }) => {
-  const [formData, setFormData] = useState({
-    nombre: user?.nombre || '',
-    email: user?.email || '',
-    rol: user?.rol || 'corredor',
-    estado: user?.estado || 'activo',
-    mfaHabilitado: user?.mfaHabilitado || false
-  });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSave(formData);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 animate-fade-in-up">
-      <div className="card max-w-md w-full mx-auto animate-fade-in-up">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-2xl font-bold text-gray-900">
-            {user ? 'Editar Usuario' : 'Nuevo Usuario'}
-          </h2>
-          <button
-            onClick={onCancel}
-            className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
-          >
-            <XCircle className="w-6 h-6" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Nombre Completo
-            </label>
-            <input
-              type="text"
-              value={formData.nombre}
-              onChange={(e) => setFormData(prev => ({ ...prev, nombre: e.target.value }))}
-              className="input-field"
-              placeholder="Ej: Juan Pérez González"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Correo Electrónico
-            </label>
-            <input
-              type="email"
-              value={formData.email}
-              onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-              className="input-field"
-              placeholder="usuario@inacap.cl"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Rol de Usuario
-            </label>
-            <select
-              value={formData.rol}
-              onChange={(e) => setFormData(prev => ({ ...prev, rol: e.target.value }))}
-              className="input-field"
-            >
-              <option value="corredor">Corredor</option>
-              <option value="auditor">Auditor</option>
-              <option value="admin">Administrador</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Estado
-            </label>
-            <select
-              value={formData.estado}
-              onChange={(e) => setFormData(prev => ({ ...prev, estado: e.target.value }))}
-              className="input-field"
-            >
-              <option value="activo">Activo</option>
-              <option value="suspendido">Suspendido</option>
-            </select>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <label className="flex items-center space-x-3 cursor-pointer">
-              <div className="relative">
-                <input
-                  type="checkbox"
-                  checked={formData.mfaHabilitado}
-                  onChange={(e) => setFormData(prev => ({ ...prev, mfaHabilitado: e.target.checked }))}
-                  className="sr-only"
-                />
-                <div className={`w-12 h-6 rounded-full transition-colors ${
-                  formData.mfaHabilitado ? 'bg-red-600' : 'bg-gray-300'
-                }`}>
-                  <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                    formData.mfaHabilitado ? 'transform translate-x-7' : 'transform translate-x-1'
-                  }`} />
-                </div>
-              </div>
-              <span className="text-sm font-medium text-gray-700">
-                Autenticación MFA
-              </span>
-            </label>
-            
-            <Shield className={`w-5 h-5 ${
-              formData.mfaHabilitado ? 'text-red-600' : 'text-gray-400'
-            }`} />
-          </div>
-
-          <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={onCancel}
-              className="btn-secondary"
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              className="btn-primary"
-            >
-              {user ? 'Guardar Cambios' : 'Crear Usuario'}
-            </button>
-          </div>
-        </form>
-      </div>
     </div>
   );
 };

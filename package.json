@@ -13,8 +13,12 @@
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.3",
     "chart.js": "^4.5.1",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
     "jwt-decode": "^4.0.0",
     "lucide-react": "^0.554.0",
+    "otpauth": "^9.4.1",
+    "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.2.0",
@@ -24,6 +28,8 @@
   },
   "scripts": {
     "start": "react-scripts start",
+    "server": "node server.js",
+    "dev": "concurrently \"npm run server\" \"npm start\"",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
@@ -49,6 +55,7 @@
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.3",
     "autoprefixer": "^10.4.14",
+    "concurrently": "^9.2.1",
     "postcss": "^8.4.24",
     "tailwindcss": "^3.3.0"
   }

@@ -1,18 +1,101 @@
+// src/services/supabase/users.js
 import { supabase } from '../../config/supabase';
 
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+
 export const usersService = {
+  
+  /**
+   * ============================================
+   * 🔐 Obtener token del usuario autenticado
+   * ============================================
+   */
+  async getAuthToken() {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token;
+  },
+
+  /**
+   * ============================================
+   * 🆕 Crear usuario vía API (backend)
+   * ============================================
+   */
+  async createUser(userData) {
+    try {
+      console.log('🆕 Enviando creación de usuario al backend...', userData);
+
+      // Validar contraseña
+      if (!userData.password) {
+        throw new Error('La contraseña es requerida para crear un usuario');
+      }
+
+      // Obtener token JWT
+      const token = await this.getAuthToken();
+      if (!token) {
+        throw new Error('No estás autenticado');
+      }
+
+      // Llamada al backend
+      const response = await fetch(`${API_URL}/admin/users`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          email: userData.email,
+          password: userData.password,
+          nombre: userData.nombre,
+          rol: userData.rol,
+          estado: userData.estado || 'activo',
+          mfaHabilitado: userData.mfaHabilitado || false
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Error al crear usuario');
+      }
+
+      console.log('✅ Usuario creado exitosamente en backend');
+      return {
+        success: true,
+        user: result.user
+      };
+
+    } catch (error) {
+      console.error('❌ Error en createUser:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  },
+
+  /**
+   * ============================================
+   * 📄 Obtener todos los usuarios (Sigue igual)
+   * ============================================
+   */
   async getUsers(filters = {}) {
     try {
       let query = supabase
         .from('usuarios')
         .select(`
           *,
-          roles:rol_id (*)
+          roles:rol_id (
+            id,
+            nombre_rol,
+            descripcion,
+            permisos
+          )
         `);
 
       if (filters.rol) {
         query = query.eq('roles.nombre_rol', filters.rol);
       }
+      
       if (filters.estado !== undefined) {
         query = query.eq('activo', filters.estado);
       }
@@ -24,11 +107,18 @@ export const usersService = {
       return {
         success: true,
         users: data.map(user => ({
-          ...user,
-          rol: user.roles?.nombre_rol
+          id: user.id,
+          nombre: user.nombre,
+          email: user.email,
+          rol: user.roles?.nombre_rol,
+          estado: user.activo ? 'activo' : 'suspendido',
+          mfaHabilitado: user.mfa_habilitado,
+          ultimoAcceso: user.ultimo_acceso,
+          fechaRegistro: user.creado_en
         }))
       };
     } catch (error) {
+      console.error('❌ Error obteniendo usuarios:', error);
       return {
         success: false,
         error: error.message,
@@ -37,73 +127,33 @@ export const usersService = {
     }
   },
 
-  async createUser(userData) {
-    try {
-      // First create auth user
-      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-        email: userData.email,
-        password: userData.password || 'tempPassword123',
-        email_confirm: true
-      });
-
-      if (authError) throw authError;
-
-      // Get role ID
-      const { data: role } = await supabase
-        .from('roles')
-        .select('id')
-        .eq('nombre_rol', userData.rol)
-        .single();
-
-      // Create user profile
-      const { data: profile, error: profileError } = await supabase
-        .from('usuarios')
-        .insert({
-          id: authData.user.id,
-          email: userData.email,
-          nombre: userData.nombre,
-          rol_id: role.id,
-          mfa_secret: userData.mfaHabilitado ? 'demo-secret' : null
-        })
-        .select(`
-          *,
-          roles:rol_id (*)
-        `)
-        .single();
-
-      if (profileError) throw profileError;
-
-      return {
-        success: true,
-        user: {
-          ...profile,
-          rol: profile.roles?.nombre_rol
-        }
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  },
-
+  /**
+   * ============================================
+   * ✏ Actualizar usuario DIRECTO en Supabase DB
+   * ============================================
+   */
   async updateUser(userId, userData) {
     try {
+      console.log('📝 Actualizando usuario:', userId);
+
       const updates = {
         nombre: userData.nombre,
-        mfa_secret: userData.mfaHabilitado ? 'demo-secret' : null,
-        activo: userData.estado === 'activo'
+        activo: userData.estado === 'activo',
+        estado: userData.estado
       };
 
-      // Update role if changed
+      if (userData.mfaHabilitado !== undefined) {
+        updates.mfa_habilitado = userData.mfaHabilitado;
+      }
+
       if (userData.rol) {
-        const { data: role } = await supabase
+        const { data: role, error: roleError } = await supabase
           .from('roles')
           .select('id')
           .eq('nombre_rol', userData.rol)
           .single();
 
+        if (roleError) throw roleError;
         updates.rol_id = role.id;
       }
 
@@ -113,20 +163,30 @@ export const usersService = {
         .eq('id', userId)
         .select(`
           *,
-          roles:rol_id (*)
+          roles:rol_id (
+            id,
+            nombre_rol,
+            permisos
+          )
         `)
         .single();
 
       if (error) throw error;
 
+      console.log('✅ Usuario actualizado');
       return {
         success: true,
         user: {
-          ...data,
-          rol: data.roles?.nombre_rol
+          id: data.id,
+          nombre: data.nombre,
+          email: data.email,
+          rol: data.roles?.nombre_rol,
+          estado: data.activo ? 'activo' : 'suspendido',
+          mfaHabilitado: data.mfa_habilitado
         }
       };
     } catch (error) {
+      console.error('❌ Error actualizando usuario:', error);
       return {
         success: false,
         error: error.message
@@ -134,8 +194,15 @@ export const usersService = {
     }
   },
 
+  /**
+   * ============================================
+   * 🗑 Eliminar usuario
+   * ============================================
+   */
   async deleteUser(userId) {
     try {
+      console.log('🗑️ Eliminando usuario:', userId);
+
       const { error } = await supabase
         .from('usuarios')
         .delete()
@@ -143,17 +210,32 @@ export const usersService = {
 
       if (error) throw error;
 
-      // Also delete auth user
-      await supabase.auth.admin.deleteUser(userId);
-
       return {
-        success: true
+        success: true,
+        message: 'Usuario eliminado correctamente'
       };
     } catch (error) {
-      return {
-        success: false,
-        error: error.message
-      };
+      console.error('❌ Error eliminando usuario:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  /**
+   * ============================================
+   * 🔑 Reset de contraseña
+   * ============================================
+   */
+  async requestPasswordReset(email) {
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`
+      });
+
+      if (error) throw error;
+
+      return { success: true, message: 'Email enviado para restablecer contraseña' };
+    } catch (error) {
+      return { success: false, error: error.message };
     }
   }
 };
