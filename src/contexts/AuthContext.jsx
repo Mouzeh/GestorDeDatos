@@ -13,32 +13,58 @@ export const useAuth = () => {
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [token, setToken] = useState(localStorage.getItem("token"));
   const [loading, setLoading] = useState(true);
 
+  // ==========================================================
+  //  🔄 Cargar usuario si hay token guardado
+  // ==========================================================
   useEffect(() => {
     checkAuth();
   }, []);
 
   const checkAuth = async () => {
     try {
+      if (!token) {
+        setLoading(false);
+        return;
+      }
+
       const userData = await authService.getCurrentUser();
       setUser(userData);
+      
     } catch (error) {
       console.error('Error checking auth:', error);
+      logout(); // limpiar token inválido
     } finally {
       setLoading(false);
     }
   };
 
+  // ==========================================================
+  //  🔐 LOGIN con token correcto
+  // ==========================================================
   const login = async (email, password) => {
     setLoading(true);
     try {
       const result = await authService.login(email, password);
-      if (result.success) {
-        setUser(result.user);
-        return { success: true, requiresMFA: result.requiresMFA };
+
+      if (!result.success) {
+        return { success: false, error: result.error };
       }
-      return { success: false, error: result.error };
+
+      // ✔ GUARDAR TOKEN REAL
+      localStorage.setItem("token", result.token);
+      setToken(result.token);
+
+      // ✔ GUARDAR USER
+      setUser(result.user);
+
+      return {
+        success: true,
+        requiresMFA: result.requiresMFA,
+      };
+
     } catch (error) {
       return { success: false, error: error.message };
     } finally {
@@ -46,6 +72,9 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // ==========================================================
+  //  🔐 MFA
+  // ==========================================================
   const verifyMFA = async (code) => {
     setLoading(true);
     try {
@@ -62,21 +91,26 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // ==========================================================
+  //  🚪 LOGOUT
+  // ==========================================================
   const logout = async () => {
     try {
       await authService.logout();
+    } finally {
+      localStorage.removeItem("token");
+      setToken(null);
       setUser(null);
-    } catch (error) {
-      console.error('Error logging out:', error);
     }
   };
 
   const value = {
     user,
+    token,
     login,
     verifyMFA,
     logout,
-    loading
+    loading,
   };
 
   return (

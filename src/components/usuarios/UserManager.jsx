@@ -2,11 +2,24 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import Header from '../ui/Header';
-import UserForm from './UserForm'; // ← IMPORT DEL NUEVO COMPONENTE
-import { Users, UserPlus, Search, Filter, Edit3, Trash2, Shield, Mail, User, CheckCircle, XCircle } from 'lucide-react';
+import UserForm from './UserForm';
+import {
+  Users,
+  UserPlus,
+  Search,
+  Edit3,
+  Trash2,
+  Shield,
+  User,
+  CheckCircle,
+  XCircle
+} from 'lucide-react';
+
+const API_URL = "http://localhost:3001/api/admin"; // 👈 BACKEND REAL
 
 const UserManager = () => {
   const { user: currentUser } = useAuth();
+
   const [users, setUsers] = useState([]);
   const [filteredUsers, setFilteredUsers] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -16,380 +29,346 @@ const UserManager = () => {
   const [editingUser, setEditingUser] = useState(null);
   const [showUserForm, setShowUserForm] = useState(false);
 
-  // Datos mock mejorados
-  const mockUsers = [
-    {
-      id: 1,
-      nombre: 'Administrador Sistema',
-      email: 'admin@inacap.cl',
-      rol: 'admin',
-      estado: 'activo',
-      mfaHabilitado: true,
-      ultimoAcceso: '2024-01-15 08:30:15',
-      fechaRegistro: '2024-01-01',
-      avatar: 'AS'
-    },
-    {
-      id: 2,
-      nombre: 'Juan Corredor',
-      email: 'corredor@inacap.cl',
-      rol: 'corredor',
-      estado: 'activo',
-      mfaHabilitado: false,
-      ultimoAcceso: '2024-01-15 09:15:22',
-      fechaRegistro: '2024-01-02',
-      avatar: 'JC'
-    },
-    {
-      id: 3,
-      nombre: 'María Auditor',
-      email: 'auditor@inacap.cl',
-      rol: 'auditor',
-      estado: 'activo',
-      mfaHabilitado: true,
-      ultimoAcceso: '2024-01-15 10:05:44',
-      fechaRegistro: '2024-01-03',
-      avatar: 'MA'
+  // ============================================================
+  // 🚀 CARGAR USUARIOS DESDE EL BACKEND
+  // ============================================================
+  const loadUsers = async () => {
+    try {
+      const token = localStorage.getItem("token");
+
+      const res = await fetch(`${API_URL}/users`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await res.json();
+
+      if (!data.success) {
+        console.error("❌ Error cargando usuarios:", data.error);
+        setUsers([]);
+        setFilteredUsers([]);
+        setLoading(false);
+        return;
+      }
+
+      const usersFormatted = data.users.map((u) => ({
+        ...u,
+        avatar: u.nombre
+          .split(" ")
+          .map((n) => n[0])
+          .join("")
+          .toUpperCase(),
+        fechaRegistro: "—",
+        ultimoAcceso: "Nunca",
+      }));
+
+      setUsers(usersFormatted);
+      setFilteredUsers(usersFormatted);
+      setLoading(false);
+
+    } catch (error) {
+      console.error("💥 Error en loadUsers:", error);
+      setLoading(false);
     }
-  ];
+  };
 
   useEffect(() => {
-    // Simular carga de datos
-    setTimeout(() => {
-      setUsers(mockUsers);
-      setFilteredUsers(mockUsers);
-      setLoading(false);
-    }, 1000);
+    loadUsers();
   }, []);
 
+  // ============================================================
+  // 🔍 FILTROS
+  // ============================================================
   useEffect(() => {
-    let filtered = users;
-    
+    let f = [...users];
+
     if (searchTerm) {
-      filtered = filtered.filter(user => 
-        user.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        user.email.toLowerCase().includes(searchTerm.toLowerCase())
+      f = f.filter(
+        (u) =>
+          u.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          u.email.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
-    
-    if (roleFilter !== 'all') {
-      filtered = filtered.filter(user => user.rol === roleFilter);
+
+    if (roleFilter !== "all") {
+      f = f.filter((u) => u.rol === roleFilter);
     }
-    
-    if (statusFilter !== 'all') {
-      filtered = filtered.filter(user => user.estado === statusFilter);
+
+    if (statusFilter !== "all") {
+      f = f.filter((u) => u.estado === statusFilter);
     }
-    
-    setFilteredUsers(filtered);
+
+    setFilteredUsers(f);
   }, [searchTerm, roleFilter, statusFilter, users]);
 
-  const getAvatarColor = (email) => {
-    const colors = [
-      'bg-gradient-to-br from-red-500 to-red-600',
-      'bg-gradient-to-br from-blue-500 to-blue-600',
-      'bg-gradient-to-br from-green-500 to-green-600',
-      'bg-gradient-to-br from-purple-500 to-purple-600',
-      'bg-gradient-to-br from-orange-500 to-orange-600',
-      'bg-gradient-to-br from-indigo-500 to-indigo-600'
-    ];
-    const index = email.length % colors.length;
-    return colors[index];
-  };
-
-  const getRoleBadge = (rol) => {
-    const roleConfig = {
-      admin: { color: 'bg-red-100 text-red-800', label: 'Administrador' },
-      corredor: { color: 'bg-blue-100 text-blue-800', label: 'Corredor' },
-      auditor: { color: 'bg-green-100 text-green-800', label: 'Auditor' }
-    };
-    
-    const config = roleConfig[rol] || { color: 'bg-gray-100 text-gray-800', label: rol };
-    
-    return (
-      <span className={`badge ${config.color}`}>
-        {config.label}
-      </span>
-    );
-  };
-
-  const getStatusBadge = (estado) => {
-    return estado === 'activo' ? (
-      <span className="badge-success">
-        <CheckCircle className="w-3 h-3 mr-1" />
-        Activo
-      </span>
-    ) : (
-      <span className="badge-error">
-        <XCircle className="w-3 h-3 mr-1" />
-        Suspendido
-      </span>
-    );
-  };
-
+  // ============================================================
+  // ✏ EDITAR USUARIO
+  // ============================================================
   const handleEditUser = (user) => {
     setEditingUser(user);
     setShowUserForm(true);
   };
 
-  const handleDeleteUser = (user) => {
-    if (window.confirm(`¿Estás seguro de eliminar al usuario ${user.nombre}?`)) {
-      setUsers(prev => prev.filter(u => u.id !== user.id));
+  // ============================================================
+  // 🗑 ELIMINAR USUARIO
+  // ============================================================
+  const handleDeleteUser = async (user) => {
+    if (!window.confirm(`¿Eliminar a ${user.nombre}?`)) return;
+
+    try {
+      const token = localStorage.getItem("token");
+
+      const res = await fetch(`${API_URL}/users/${user.id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        loadUsers();
+      } else {
+        alert("❌ Error eliminando usuario: " + data.error);
+      }
+    } catch (error) {
+      console.error(error);
+      alert("❌ Error eliminando usuario.");
     }
   };
 
+  // ============================================================
+  // 💾 CREAR / ACTUALIZAR USUARIO (SOLO BACKEND)
+  // ============================================================
   const handleSaveUser = async (userData) => {
     try {
-      console.log('💾 Guardando usuario:', userData);
+      const token = localStorage.getItem("token");
+
+      let method = "POST";
+      let url = `${API_URL}/users`;
 
       if (editingUser) {
-        // ✅ EDITAR USUARIO EXISTENTE
-        console.log('📝 Actualizando usuario existente...');
-        
-        // Aquí llamarías al servicio de actualización
-        // const result = await usersService.updateUser(editingUser.id, userData);
-        
-        // Por ahora, actualización local
-        setUsers(prev => prev.map(u => 
-          u.id === editingUser.id ? { ...u, ...userData } : u
-        ));
-        
-        alert('✅ Usuario actualizado correctamente');
-      } else {
-        // ✅ CREAR NUEVO USUARIO (con contraseña)
-        console.log('🆕 Creando nuevo usuario con contraseña...');
-        
-        if (!userData.password) {
-          alert('❌ Error: La contraseña es requerida para usuarios nuevos');
-          return;
-        }
-
-        // Importar el servicio de usuarios
-        const { usersService } = await import('../../services/supabase/users');
-        
-        const result = await usersService.createUser(userData);
-        
-        if (result.success) {
-          console.log('✅ Usuario creado exitosamente:', result.user);
-          
-          // Agregar a la lista local
-          const newUser = {
-            ...result.user,
-            avatar: userData.nombre.split(' ').map(n => n[0]).join(''),
-            fechaRegistro: new Date().toISOString().split('T')[0],
-            ultimoAcceso: 'Nunca'
-          };
-          
-          setUsers(prev => [...prev, newUser]);
-          alert('✅ Usuario creado exitosamente');
-        } else {
-          console.error('❌ Error creando usuario:', result.error);
-          alert(`❌ Error al crear usuario: ${result.error}`);
-          return; // No cerrar el formulario si hay error
-        }
+        method = "PUT";
+        url = `${API_URL}/users/${editingUser.id}`;
       }
-      
-      // Solo cerrar si todo salió bien
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(userData),
+      });
+
+      const data = await res.json();
+
+      if (!data.success) {
+        alert("❌ Error: " + data.error);
+        return;
+      }
+
+      await loadUsers();
       setShowUserForm(false);
       setEditingUser(null);
-      
+
+      alert("✔ Usuario guardado con éxito");
     } catch (error) {
-      console.error('💥 Error en handleSaveUser:', error);
-      alert(`❌ Error: ${error.message}`);
+      console.error("❌ Error:", error);
+      alert("❌ Error guardando usuario.");
     }
   };
 
+  // ============================================================
+  // 🕒 LOADING
+  // ============================================================
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+      <div className="min-h-screen bg-gray-100">
         <Header />
-        <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-          <div className="card animate-pulse">
-            <div className="flex justify-center items-center py-12">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
-            </div>
-          </div>
+        <div className="w-full text-center mt-20">
+          <div className="animate-spin h-12 w-12 border-b-2 border-red-600 rounded-full mx-auto"></div>
+          <p className="mt-4 text-gray-600">Cargando usuarios...</p>
         </div>
       </div>
     );
   }
 
+  // ============================================================
+  // 🎨 UI
+  // ============================================================
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       <Header />
-      
-      <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        <div className="card animate-fade-in-up">
-          
-          {/* Header del módulo */}
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-8">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">Gestión de Usuarios</h1>
-              <p className="text-gray-600">Administra usuarios, roles y permisos del sistema tributario</p>
-            </div>
-            
-            <button
-              onClick={() => setShowUserForm(true)}
-              className="btn-primary flex items-center space-x-2 mt-4 lg:mt-0"
-            >
-              <UserPlus className="w-5 h-5" />
-              <span>Nuevo Usuario</span>
-            </button>
+
+      <div className="max-w-7xl mx-auto py-8 px-4">
+        {/* Header */}
+        <div className="flex justify-between items-center mb-8">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Gestión de Usuarios</h1>
+            <p className="text-gray-600">Administra usuarios, roles y MFA</p>
           </div>
 
-          {/* Estadísticas rápidas */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <div className="card text-center bg-gradient-to-br from-blue-50 to-blue-100 border-blue-200">
-              <Users className="w-8 h-8 text-blue-600 mx-auto mb-2" />
-              <div className="text-2xl font-bold text-blue-600">{users.length}</div>
-              <div className="text-sm text-blue-800 font-medium">Total Usuarios</div>
-            </div>
-            <div className="card text-center bg-gradient-to-br from-green-50 to-green-100 border-green-200">
-              <CheckCircle className="w-8 h-8 text-green-600 mx-auto mb-2" />
-              <div className="text-2xl font-bold text-green-600">
-                {users.filter(u => u.estado === 'activo').length}
-              </div>
-              <div className="text-sm text-green-800 font-medium">Activos</div>
-            </div>
-            <div className="card text-center bg-gradient-to-br from-red-50 to-red-100 border-red-200">
-              <Shield className="w-8 h-8 text-red-600 mx-auto mb-2" />
-              <div className="text-2xl font-bold text-red-600">
-                {users.filter(u => u.rol === 'admin').length}
-              </div>
-              <div className="text-sm text-red-800 font-medium">Administradores</div>
-            </div>
-            <div className="card text-center bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200">
-              <User className="w-8 h-8 text-purple-600 mx-auto mb-2" />
-              <div className="text-2xl font-bold text-purple-600">
-                {users.filter(u => u.mfaHabilitado).length}
-              </div>
-              <div className="text-sm text-purple-800 font-medium">Con MFA</div>
-            </div>
+          <button
+            onClick={() => setShowUserForm(true)}
+            className="btn-primary flex items-center space-x-2"
+          >
+            <UserPlus className="w-5 h-5" />
+            <span>Nuevo Usuario</span>
+          </button>
+        </div>
+
+        {/* Conteo */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          <div className="card text-center bg-blue-50 border-blue-200">
+            <Users className="w-8 h-8 text-blue-600 mx-auto mb-2" />
+            <div className="text-2xl font-bold text-blue-600">{users.length}</div>
+            <div className="text-sm font-medium">Total Usuarios</div>
           </div>
 
-          {/* Filtros y búsqueda */}
-          <div className="card bg-gray-50 mb-6">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0">
-              <div className="flex-1 max-w-md">
-                <div className="relative">
-                  <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
-                  <input
-                    type="text"
-                    placeholder="Buscar usuarios..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="input-field pl-12 bg-white"
-                  />
-                </div>
-              </div>
-              
-              <div className="flex items-center space-x-4">
-                <select
-                  value={roleFilter}
-                  onChange={(e) => setRoleFilter(e.target.value)}
-                  className="input-field w-auto bg-white"
-                >
-                  <option value="all">Todos los roles</option>
-                  <option value="admin">Administradores</option>
-                  <option value="corredor">Corredores</option>
-                  <option value="auditor">Auditores</option>
-                </select>
-                
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="input-field w-auto bg-white"
-                >
-                  <option value="all">Todos los estados</option>
-                  <option value="activo">Activos</option>
-                  <option value="suspendido">Suspendidos</option>
-                </select>
-              </div>
+          <div className="card text-center bg-green-50 border-green-200">
+            <CheckCircle className="w-8 h-8 text-green-600 mx-auto mb-2" />
+            <div className="text-2xl font-bold text-green-600">
+              {users.filter((u) => u.estado === "activo").length}
             </div>
+            <div className="text-sm font-medium">Activos</div>
           </div>
 
-          {/* Tabla de usuarios */}
-          <div className="card p-0 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gradient-to-r from-gray-50 to-gray-100">
-                  <tr>
-                    <th className="table-header">Usuario</th>
-                    <th className="table-header">Rol</th>
-                    <th className="table-header">Estado</th>
-                    <th className="table-header">MFA</th>
-                    <th className="table-header">Último Acceso</th>
-                    <th className="table-header">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {filteredUsers.map((user) => (
-                    <tr key={user.id} className="hover:bg-gray-50 transition-colors group">
-                      <td className="table-cell">
-                        <div className="flex items-center space-x-3">
-                          <div className={`w-10 h-10 ${getAvatarColor(user.email)} rounded-2xl flex items-center justify-center text-white font-semibold shadow-md`}>
-                            {user.avatar}
-                          </div>
-                          <div>
-                            <p className="font-semibold text-gray-900">{user.nombre}</p>
-                            <p className="text-sm text-gray-500">{user.email}</p>
-                          </div>
+          <div className="card text-center bg-red-50 border-red-200">
+            <Shield className="w-8 h-8 text-red-600 mx-auto mb-2" />
+            <div className="text-2xl font-bold text-red-600">
+              {users.filter((u) => u.rol === "admin").length}
+            </div>
+            <div className="text-sm font-medium">Administradores</div>
+          </div>
+
+          <div className="card text-center bg-purple-50 border-purple-200">
+            <User className="w-8 h-8 text-purple-600 mx-auto mb-2" />
+            <div className="text-2xl font-bold text-purple-600">
+              {users.filter((u) => u.mfaHabilitado).length}
+            </div>
+            <div className="text-sm font-medium">Con MFA</div>
+          </div>
+        </div>
+
+        {/* Filtros */}
+        <div className="card bg-gray-50 mb-6">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between">
+            <div className="relative max-w-md w-full">
+              <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Buscar usuarios..."
+                className="input-field pl-12 bg-white"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+
+            <div className="flex space-x-4 mt-4 md:mt-0">
+              <select
+                className="input-field bg-white"
+                value={roleFilter}
+                onChange={(e) => setRoleFilter(e.target.value)}
+              >
+                <option value="all">Todos los roles</option>
+                <option value="admin">Administradores</option>
+                <option value="corredor">Corredores</option>
+                <option value="auditor">Auditores</option>
+              </select>
+
+              <select
+                className="input-field bg-white"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                <option value="all">Todos los estados</option>
+                <option value="activo">Activos</option>
+                <option value="suspendido">Suspendidos</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Tabla */}
+        <div className="card p-0 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="table-header">Usuario</th>
+                  <th className="table-header">Rol</th>
+                  <th className="table-header">Estado</th>
+                  <th className="table-header">MFA</th>
+                  <th className="table-header">Acciones</th>
+                </tr>
+              </thead>
+
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredUsers.map((user) => (
+                  <tr key={user.id} className="hover:bg-gray-50 transition">
+                    <td className="table-cell">
+                      <div className="flex items-center space-x-3">
+                        <div
+                          className={`w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center text-white font-semibold`}
+                        >
+                          {user.avatar}
                         </div>
-                      </td>
-                      <td className="table-cell">
-                        {getRoleBadge(user.rol)}
-                      </td>
-                      <td className="table-cell">
-                        {getStatusBadge(user.estado)}
-                      </td>
-                      <td className="table-cell">
-                        {user.mfaHabilitado ? (
-                          <span className="badge-success">Habilitado</span>
-                        ) : (
-                          <span className="badge-warning">No activo</span>
-                        )}
-                      </td>
-                      <td className="table-cell">
-                        <p className="text-sm text-gray-900">{user.ultimoAcceso}</p>
-                        <p className="text-xs text-gray-500">Registro: {user.fechaRegistro}</p>
-                      </td>
-                      <td className="table-cell">
-                        <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div>
+                          <p className="font-semibold text-gray-900">{user.nombre}</p>
+                          <p className="text-sm text-gray-500">{user.email}</p>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="table-cell">{user.rol}</td>
+                    <td className="table-cell">{user.estado}</td>
+
+                    <td className="table-cell">
+                      {user.mfaHabilitado ? (
+                        <span className="badge-success">Habilitado</span>
+                      ) : (
+                        <span className="badge-warning">No activo</span>
+                      )}
+                    </td>
+
+                    <td className="table-cell">
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => handleEditUser(user)}
+                          className="p-2 text-blue-600 hover:bg-blue-50 rounded-xl"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+
+                        {user.id !== currentUser?.id && (
                           <button
-                            onClick={() => handleEditUser(user)}
-                            className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-xl transition-all duration-300"
-                            title="Editar usuario"
+                            onClick={() => handleDeleteUser(user)}
+                            className="p-2 text-red-600 hover:bg-red-50 rounded-xl"
                           >
-                            <Edit3 className="w-4 h-4" />
+                            <Trash2 className="w-4 h-4" />
                           </button>
-                          {user.id !== currentUser?.id && (
-                            <button
-                              onClick={() => handleDeleteUser(user)}
-                              className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-xl transition-all duration-300"
-                              title="Eliminar usuario"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {filteredUsers.length === 0 && (
-              <div className="text-center py-12">
-                <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-500 text-lg">No se encontraron usuarios</p>
-                <p className="text-gray-400 text-sm mt-2">Intenta ajustar los filtros de búsqueda</p>
-              </div>
-            )}
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
+
+          {filteredUsers.length === 0 && (
+            <div className="text-center py-12">
+              <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-500 text-lg">No se encontraron usuarios</p>
+              <p className="text-gray-400 text-sm mt-2">Ajusta la búsqueda o los filtros</p>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Modal de formulario de usuario */}
       {showUserForm && (
         <UserForm
           user={editingUser}

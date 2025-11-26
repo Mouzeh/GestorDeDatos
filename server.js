@@ -86,10 +86,7 @@ app.post('/api/admin/users', verifyAdmin, async (req, res) => {
       email,
       password,
       email_confirm: true,
-      user_metadata: {
-        nombre,
-        rol
-      }
+      user_metadata: { nombre, rol }
     });
 
     if (authError) {
@@ -106,7 +103,7 @@ app.post('/api/admin/users', verifyAdmin, async (req, res) => {
       .eq('nombre_rol', rol)
       .single();
 
-    if (roleError) {
+    if (roleError || !roleData) {
       await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
       return res.status(400).json({ error: `Rol "${rol}" no encontrado` });
     }
@@ -115,7 +112,7 @@ app.post('/api/admin/users', verifyAdmin, async (req, res) => {
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('usuarios')
       .upsert({
-        id: authData.user.id,  // PK
+        id: authData.user.id,
         email,
         nombre,
         rol_id: roleData.id,
@@ -154,6 +151,45 @@ app.post('/api/admin/users', verifyAdmin, async (req, res) => {
 
   } catch (error) {
     console.error('💥 Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ====================================
+// 📄 LISTAR USUARIOS  ← ← ← (FALTABA)
+// ====================================
+app.get('/api/admin/users', verifyAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('usuarios')
+      .select(`
+        id,
+        email,
+        nombre,
+        estado,
+        activo,
+        mfa_habilitado,
+        roles:rol_id (nombre_rol)
+      `)
+      .order('nombre', { ascending: true });
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      users: data.map(u => ({
+        id: u.id,
+        email: u.email,
+        nombre: u.nombre,
+        rol: u.roles?.nombre_rol,
+        estado: u.estado,
+        activo: u.activo,
+        mfaHabilitado: u.mfa_habilitado
+      }))
+    });
+
+  } catch (error) {
+    console.error("❌ Error listando usuarios:", error);
     res.status(500).json({ error: error.message });
   }
 });
