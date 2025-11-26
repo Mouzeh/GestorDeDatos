@@ -1,14 +1,18 @@
 import { supabase } from '../../config/supabase';
 
+// 🔥 URL DEL BACKEND REAL
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000/api";
+
 export const authService = {
 
   // ===================================================
-  // LOGIN - COMPLETAMENTE CORREGIDO para usar 'usuarios'
+  // 🔐 LOGIN → maneja MFA si está habilitado
   // ===================================================
   async login(email, password) {
     try {
       console.log("🔐 Iniciando login para:", email);
 
+      // 1. Autenticación en Supabase
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password
@@ -16,154 +20,203 @@ export const authService = {
 
       if (error) throw error;
 
-      console.log("✅ Login correcto. Cargando perfil...");
+      const authUser = data.user;
 
-      // ✅ CORREGIDO: Usar 'usuarios' en lugar de 'user_profiles'
-      let { data: profile, error: profileError } = await supabase
-        .from('usuarios')
+      // 2. Obtener perfil desde BD
+      const { data: profile, error: profileError } = await supabase
+        .from("usuarios")
         .select(`
           *,
-          roles:rol_id (
-            id,
-            nombre_rol,
-            descripcion,
-            permisos
-          )
+          roles:rol_id(id, nombre_rol, permisos)
         `)
-        .eq('id', data.user.id)
+        .eq("id", authUser.id)
         .single();
 
-      // Si NO existe perfil → crearlo
+      // Si el perfil NO existe → crearlo
       if (profileError && profileError.code === "PGRST116") {
-        console.log("ℹ️ No existe perfil. Creando...");
-        profile = await this.createUserProfile(data.user);
-      } else if (profileError) {
-        console.error("❌ Error obteniendo perfil:", profileError);
-        throw profileError;
+        const newProfile = await this.createUserProfile(authUser);
+        return {
+          success: true,
+          requiresMFA: false,
+          user: newProfile,
+          token: data.session.access_token
+        };
       }
 
-      // Actualizar último acceso
-      await this.updateLastAccess(profile.id);
+      if (profileError) throw profileError;
+
+      // 3. SI NO tiene MFA → login directo
+      if (!profile.mfa_habilitado) {
+        return {
+          success: true,
+          requiresMFA: false,
+          user: profile,
+          token: data.session.access_token
+        };
+      }
+
+      // 4. MFA HABILITADO → enviar OTP al correo
+      console.log("📨 Enviando OTP a:", profile.email);
+
+      const otpResponse = await this.generateEmailOTP(profile.id, profile.email);
+
+      if (!otpResponse.success) {
+        return { success: false, error: otpResponse.error };
+      }
 
       return {
         success: true,
-        user: {
-          id: profile.id,
-          email: profile.email,
-          nombre: profile.nombre,
-          rol: profile.roles?.nombre_rol || "corredor",
-          permisos: profile.roles?.permisos || [],
-          estado: profile.estado,
-          activo: profile.activo
-        },
-        token: data.session.access_token,
-        requiresMFA: !!profile.mfa_secret
+        requiresMFA: true,
+        email: profile.email,
+        userId: profile.id
       };
 
     } catch (error) {
-      console.error("❌ Error en login:", error);
-      return {
-        success: false,
-        error: error.message
-      };
+      console.error("❌ Error Login:", error);
+      return { success: false, error: error.message };
     }
   },
 
   // ===================================================
-  // CREAR PERFIL - COMPLETAMENTE CORREGIDO para usar 'usuarios'
+  // 🔥 GENERAR OTP: Guardar en BD + Enviar al backend real
   // ===================================================
-  async createUserProfile(authUser) {
+  async generateEmailOTP(userId, email) {
     try {
-      console.log('🎯 Creando perfil para:', authUser.email);
-      
-      // Obtener el ID del rol corredor dinámicamente
-      const defaultRoleId = await this.getDefaultRoleId();
-      const defaultName = this.generateDefaultName(authUser.email);
-      
-      console.log('📋 Datos del nuevo perfil:', {
-        id: authUser.id,
-        email: authUser.email,
-        nombre: defaultName,
-        rol_id: defaultRoleId
-      });
-      
-      // ✅ CORREGIDO: Usar 'usuarios' en lugar de 'user_profiles'
-      const { data: profile, error } = await supabase
-        .from('usuarios')
-        .insert([
-          {
-            id: authUser.id,
-            email: authUser.email,
-            nombre: defaultName,
-            rol_id: defaultRoleId,
-            estado: "activo",
-            activo: true
-          }
-        ])
-        .select(`
-          *,
-          roles:rol_id (
-            id,
-            nombre_rol,
-            descripcion,
-            permisos
-          )
-        `)
-        .single();
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      console.log("🔢 OTP generado:", otp);
 
-      if (error) {
-        console.error("❌ Error SQL detallado creando perfil:", error);
-        
-        // Manejar errores específicos
-        if (error.code === '42501') {
-          throw new Error('Error de permisos RLS. Verifica las políticas de seguridad.');
-        }
-        if (error.code === '23505') {
-          throw new Error('El usuario ya existe en la base de datos.');
-        }
-        
-        throw error;
+      // 1) Guardar OTP en base de datos
+      const { error: updateError } = await supabase
+        .from("usuarios")
+        .update({
+          otp_code: otp,
+          otp_expires: new Date(Date.now() + 5 * 60000).toISOString()
+        })
+        .eq("id", userId);
+
+      if (updateError) throw updateError;
+
+      // 2) Enviar OTP al backend para que mande correo
+      const res = await fetch(`${API_URL}/send-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, otp })
+      });
+
+      const json = await res.json();
+
+      if (!json.success) {
+        console.error("❌ Backend no pudo enviar correo:", json.error);
+        return { success: false, error: "Error enviando correo MFA" };
       }
 
-      console.log("✅ Perfil creado exitosamente:", profile);
+      console.log("📧 OTP enviado exitosamente");
+      return { success: true };
+
+    } catch (error) {
+      console.error("❌ Error generando OTP:", error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // ===================================================
+  // 🔑 VERIFICAR MFA
+  // ===================================================
+  async verifyMFA(email, code) {
+    try {
+      const { data: profile, error } = await supabase
+        .from("usuarios")
+        .select("*")
+        .eq("email", email)
+        .single();
+
+      if (error) throw error;
+
+      if (!profile.otp_code)
+        throw new Error("No se generó MFA para este usuario");
+
+      if (profile.otp_code !== code)
+        throw new Error("Código incorrecto");
+
+      if (new Date(profile.otp_expires) < new Date())
+        throw new Error("El código MFA expiró");
+
+      // Limpiar código
+      await supabase
+        .from("usuarios")
+        .update({ otp_code: null, otp_expires: null })
+        .eq("id", profile.id);
+
+      console.log("🔓 MFA verificado correctamente");
+
+      return { success: true };
+
+    } catch (error) {
+      console.error("❌ Error verificando MFA:", error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // ===================================================
+  // 👤 GET CURRENT USER
+  // ===================================================
+  async getCurrentUser() {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return null;
+
+      const { data: profile } = await supabase
+        .from("usuarios")
+        .select(`
+          *,
+          roles:rol_id(id, nombre_rol, permisos)
+        `)
+        .eq("id", user.id)
+        .single();
+
       return profile;
 
     } catch (error) {
-      console.error("💥 Error fatal creando perfil:", error);
-      throw new Error(`No se pudo crear el perfil: ${error.message}`);
+      console.error("❌ Error getCurrentUser:", error);
+      return null;
     }
   },
 
   // ===================================================
-  // OBTENER ROL POR DEFECTO
+  // 🏷️ CREAR PERFIL AUTOMÁTICAMENTE
   // ===================================================
+  async createUserProfile(authUser) {
+    const defaultRoleId = await this.getDefaultRoleId();
+    const defaultName = this.generateDefaultName(authUser.email);
+
+    const { data: profile, error } = await supabase
+      .from("usuarios")
+      .insert([{
+        id: authUser.id,
+        email: authUser.email,
+        nombre: defaultName,
+        rol_id: defaultRoleId,
+        estado: "activo",
+        activo: true
+      }])
+      .select("*")
+      .single();
+
+    if (error) throw error;
+
+    return profile;
+  },
+
   async getDefaultRoleId() {
-    try {
-      console.log('🔍 Obteniendo ID del rol corredor...');
-      
-      const { data, error } = await supabase
-        .from("roles")
-        .select("id")
-        .eq("nombre_rol", "corredor")
-        .single();
+    const { data } = await supabase
+      .from("roles")
+      .select("id")
+      .eq("nombre_rol", "corredor")
+      .single();
 
-      if (error) {
-        console.error("❌ Error obteniendo rol corredor:", error);
-        throw new Error('No se encontró el rol "corredor". Verifica que exista en la tabla roles.');
-      }
-
-      console.log('✅ Rol corredor ID encontrado:', data.id);
-      return data.id;
-
-    } catch (error) {
-      console.error("⚠️ Error crítico en getDefaultRoleId:", error);
-      throw error;
-    }
+    return data.id;
   },
 
-  // ===================================================
-  // FORMATEAR NOMBRE POR DEFECTO
-  // ===================================================
   generateDefaultName(email) {
     return email
       .split("@")[0]
@@ -171,183 +224,12 @@ export const authService = {
       .replace(/\b\w/g, l => l.toUpperCase());
   },
 
-  // ===================================================
-  // GET CURRENT USER - COMPLETAMENTE CORREGIDO para usar 'usuarios'
-  // ===================================================
-  async getCurrentUser() {
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-      if (authError || !user) {
-        console.log('👤 No hay usuario autenticado');
-        return null;
-      }
-
-      console.log('🔍 Buscando perfil para usuario:', user.id);
-
-      // ✅ CORREGIDO: Usar 'usuarios' en lugar de 'user_profiles'
-      const { data: profile, error: profileError } = await supabase
-        .from('usuarios')
-        .select(`
-          *,
-          roles:rol_id (
-            id,
-            nombre_rol,
-            descripcion,
-            permisos
-          )
-        `)
-        .eq('id', user.id)
-        .single();
-
-      if (profileError) {
-        console.error("⚠️ Error obteniendo perfil:", profileError);
-        
-        // Si el perfil no existe, crearlo automáticamente
-        if (profileError.code === 'PGRST116') {
-          console.log('🔄 Perfil no encontrado, creando automáticamente...');
-          try {
-            const newProfile = await this.createUserProfile(user);
-            return {
-              id: newProfile.id,
-              email: newProfile.email,
-              nombre: newProfile.nombre,
-              rol: newProfile.roles?.nombre_rol || "corredor",
-              permisos: newProfile.roles?.permisos || [],
-              estado: newProfile.estado,
-              activo: newProfile.activo
-            };
-          } catch (createError) {
-            console.error('💥 Error creando perfil en getCurrentUser:', createError);
-            return null;
-          }
-        }
-        
-        return null;
-      }
-
-      console.log('✅ Perfil cargado exitosamente');
-      return {
-        id: profile.id,
-        email: profile.email,
-        nombre: profile.nombre,
-        rol: profile.roles?.nombre_rol || "corredor",
-        permisos: profile.roles?.permisos || [],
-        estado: profile.estado,
-        activo: profile.activo
-      };
-
-    } catch (error) {
-      console.error("❌ Error en getCurrentUser:", error);
-      return null;
-    }
-  },
-
-  // ===================================================
-  // VERIFICACIÓN MFA - COMPLETAMENTE CORREGIDO para usar 'usuarios'
-  // ===================================================
-  async verifyMFA(code) {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) throw new Error('Usuario no autenticado');
-
-      // ✅ CORREGIDO: Usar 'usuarios' en lugar de 'user_profiles'
-      const { data: profile } = await supabase
-        .from('usuarios')
-        .select(`
-          *,
-          roles:rol_id (
-            id,
-            nombre_rol,
-            permisos
-          )
-        `)
-        .eq('id', user.id)
-        .single();
-
-      if (!profile) throw new Error('Perfil de usuario no encontrado');
-
-      // Lógica de verificación MFA (simplificada)
-      if (code.length === 6 && /^\d+$/.test(code)) {
-        return {
-          success: true,
-          user: {
-            id: profile.id,
-            email: profile.email,
-            nombre: profile.nombre,
-            rol: profile.roles?.nombre_rol || 'corredor',
-            permisos: profile.roles?.permisos || []
-          }
-        };
-      } else {
-        throw new Error('Código MFA inválido');
-      }
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  },
-
-  // ===================================================
-  // ACTUALIZAR ÚLTIMO ACCESO
-  // ===================================================
-  async updateLastAccess(userId) {
-    try {
-      const { error } = await supabase
-        .from('usuarios')
-        .update({ ultimo_acceso: new Date().toISOString() })
-        .eq('id', userId);
-
-      if (error) {
-        console.error("⚠️ Error actualizando último acceso:", error);
-      }
-    } catch (error) {
-      console.error("⚠️ Error en updateLastAccess:", error);
-    }
-  },
-
-  // ===================================================
-  // LOGOUT
-  // ===================================================
   async logout() {
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-      
-      console.log("✅ Sesión cerrada exitosamente");
-      return { success: true };
-      
-    } catch (error) {
-      console.error("❌ Error en logout:", error);
-      return { 
-        success: false,
-        error: error.message 
-      };
-    }
+    await supabase.auth.signOut();
+    return { success: true };
   },
 
-  // ===================================================
-  // VERIFICAR ESTADO DE SESIÓN
-  // ===================================================
   async checkSession() {
-    try {
-      const { data: { session }, error } = await supabase.auth.getSession();
-      
-      if (error) throw error;
-      
-      return {
-        isAuthenticated: !!session,
-        session
-      };
-    } catch (error) {
-      console.error("❌ Error verificando sesión:", error);
-      return {
-        isAuthenticated: false,
-        session: null
-      };
-    }
+    return await supabase.auth.getSession();
   }
 };

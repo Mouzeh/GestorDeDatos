@@ -17,6 +17,7 @@
     "express": "^5.1.0",
     "jwt-decode": "^4.0.0",
     "lucide-react": "^0.554.0",
+    "nodemailer": "^7.0.10",
     "otpauth": "^9.4.1",
     "qrcode": "^1.5.4",
     "react": "^19.2.0",
@@ -24,6 +25,7 @@
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.6",
     "react-scripts": "5.0.1",
+    "resend": "^6.5.2",
     "web-vitals": "^2.1.4"
   },
   "scripts": {

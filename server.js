@@ -1,310 +1,197 @@
-// server.js - API Backend para operaciones admin
-require('dotenv').config();
+require('dotenv').config({ path: '.env.backend' });
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
+const nodemailer = require("nodemailer");
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 4000;
 
-// Cliente Supabase con Service Role Key (SOLO BACKEND)
+app.use(cors());
+app.use(express.json());
+
+// ===========================================================
+// 🔐 GLOBAL — Guardar OTP en memoria
+// ===========================================================
+global.MFA_CODE = {}; // { email: { code: '123456', expires: timestamp } }
+
+// ===========================================================
+// 🔐 SUPABASE ADMIN (SERVICE ROLE KEY)
+// ===========================================================
 const supabaseAdmin = createClient(
-  process.env.REACT_APP_SUPABASE_URL,
+  process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY,
   {
     auth: {
       autoRefreshToken: false,
-      persistSession: false
-    }
+      persistSession: false,
+    },
   }
 );
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// ===========================================================
+// 📧 CONFIGURACIÓN SMTP GMAIL (CORREGIDO)
+// ===========================================================
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,        // 👈 antes era MFA_EMAIL
+    pass: process.env.EMAIL_PASS_APP,    // 👈 antes era MFA_EMAIL_PASSWORD
+  },
+});
 
-// ====================================
-// 🔐 MIDDLEWARE DE AUTENTICACIÓN ADMIN
-// ====================================
-async function verifyAdmin(req, res, next) {
-  const token = req.headers.authorization?.split('Bearer ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ error: 'No autorizado' });
+// ===========================================================
+// 📧 FUNCIÓN FINAL PARA ENVIAR OTP
+// ===========================================================
+async function sendMFAEmail(email, otp) {
+
+  if (!otp) {
+    console.log("❌ ERROR: OTP vacío antes de enviar correo");
+    throw new Error("OTP vacío");
   }
 
-  try {
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
-    
-    if (error || !user) {
-      return res.status(401).json({ error: 'Token inválido' });
-    }
-
-    // Verificar que sea admin
-    const { data: profile } = await supabaseAdmin
-      .from('usuarios')
-      .select('roles:rol_id(nombre_rol)')
-      .eq('id', user.id)
-      .single();
-
-    if (profile?.roles?.nombre_rol !== 'admin') {
-      return res.status(403).json({ error: 'Requiere permisos de administrador' });
-    }
-
-    req.user = user;
-    next();
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
+  return transporter.sendMail({
+    from: `"Sistema Tributario" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: "🔐 Código MFA de acceso",
+    html: `
+      <h2>Tu código de verificación</h2>
+      <p style="font-size: 28px; font-weight: bold;">${otp}</p>
+      <p>Este código expirará en 5 minutos.</p>
+    `,
+  });
 }
 
-// ====================================
-// 🆕 CREAR USUARIO
-// ====================================
-app.post('/api/admin/users', verifyAdmin, async (req, res) => {
+// ===========================================================
+// 📧 ENVIAR OTP (SOLO UN SISTEMA, YA NO HAY DUPLICADOS)
+// ===========================================================
+app.post("/api/send-otp", async (req, res) => {
   try {
-    const { email, password, nombre, rol, mfaHabilitado } = req.body;
+    const { email, otp } = req.body;
 
-    console.log('🆕 Creando usuario:', email);
-
-    if (!email || !password || !nombre || !rol) {
-      return res.status(400).json({
-        error: 'Faltan campos requeridos: email, password, nombre, rol'
-      });
+    if (!otp) {
+      console.log("❌ /api/send-otp recibió OTP vacío");
+      return res.json({ success: false, error: "OTP vacío" });
     }
 
-    // PREVENIR EMAIL DUPLICADO EN AUTH
-    const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
-    if (existingUsers?.users.some(u => u.email === email)) {
-      return res.status(400).json({
-        error: 'El correo ya está registrado en Supabase Auth'
-      });
+    // Guardar en memoria
+    global.MFA_CODE[email] = {
+      code: otp,
+      expires: Date.now() + 5 * 60 * 1000,
+    };
+
+    console.log("📨 Enviando OTP real:", otp);
+
+    await sendMFAEmail(email, otp);
+
+    return res.json({ success: true });
+
+  } catch (error) {
+    console.error("❌ Error enviando OTP:", error);
+    return res.json({ success: false, error: error.message });
+  }
+});
+
+// ===========================================================
+// 🔐 LOGIN (solo email + password)
+// ===========================================================
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const { data, error } = await supabaseAdmin.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      return res.json({ success: false, error: error.message });
     }
 
-    // 1. Crear usuario en Auth
-    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+    const { data: profile } = await supabaseAdmin
+      .from("usuarios")
+      .select("*, roles:rol_id(nombre_rol)")
+      .eq("id", data.user.id)
+      .single();
+
+    return res.json({
+      success: true,
+      user: profile,
+      token: data.session.access_token,
+      requiresMFA: profile.mfa_habilitado,
+    });
+
+  } catch (error) {
+    return res.json({ success: false, error: error.message });
+  }
+});
+
+// ===========================================================
+// 🔐 VERIFICAR MFA
+// ===========================================================
+app.post("/api/mfa/verify", async (req, res) => {
+  try {
+    const { email, code } = req.body;
+
+    const saved = global.MFA_CODE[email];
+
+    if (!saved)
+      return res.json({ success: false, error: "No existe MFA para este usuario" });
+
+    if (Date.now() > saved.expires)
+      return res.json({ success: false, error: "Código expirado" });
+
+    if (saved.code !== code)
+      return res.json({ success: false, error: "Código incorrecto" });
+
+    delete global.MFA_CODE[email];
+
+    return res.json({ success: true });
+
+  } catch (error) {
+    return res.json({ success: false, error: error.message });
+  }
+});
+
+// ===========================================================
+// 🆕 CREAR USUARIO (ADMIN PANEL)
+// ===========================================================
+app.post("/api/admin/users", verifyAdmin, async (req, res) => {
+  try {
+    const { email, password, nombre, rol, mfa_habilitado } = req.body;
+
+    const { data: authUser, error } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
-      user_metadata: { nombre, rol }
     });
 
-    if (authError) {
-      console.error('❌ Error en Auth:', authError);
-      return res.status(400).json({ error: authError.message });
-    }
+    if (error) return res.json({ success: false, error: error.message });
 
-    console.log('✅ Usuario creado en Auth:', authData.user.id);
-
-    // 2. Obtener ID del rol
-    const { data: roleData, error: roleError } = await supabaseAdmin
-      .from('roles')
-      .select('id')
-      .eq('nombre_rol', rol)
+    const { data: roleData } = await supabaseAdmin
+      .from("roles")
+      .select("id")
+      .eq("nombre_rol", rol)
       .single();
 
-    if (roleError || !roleData) {
-      await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
-      return res.status(400).json({ error: `Rol "${rol}" no encontrado` });
-    }
-
-    // 3. Crear perfil en tabla usuarios (SIN DUPLICAR)
-    const { data: profile, error: profileError } = await supabaseAdmin
-      .from('usuarios')
-      .upsert({
-        id: authData.user.id,
-        email,
-        nombre,
-        rol_id: roleData.id,
-        estado: 'activo',
-        activo: true,
-        mfa_habilitado: mfaHabilitado || false
-      })
-      .select(`
-        *,
-        roles:rol_id (
-          id,
-          nombre_rol,
-          permisos
-        )
-      `)
-      .single();
-
-    if (profileError) {
-      await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
-      return res.status(400).json({ error: profileError.message });
-    }
-
-    console.log('✅ Usuario creado completamente');
-
-    res.json({
-      success: true,
-      user: {
-        id: profile.id,
-        nombre: profile.nombre,
-        email: profile.email,
-        rol: profile.roles?.nombre_rol,
-        estado: profile.estado,
-        mfaHabilitado: profile.mfa_habilitado
-      }
-    });
-
-  } catch (error) {
-    console.error('💥 Error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ====================================
-// 📄 LISTAR USUARIOS  ← ← ← (FALTABA)
-// ====================================
-app.get('/api/admin/users', verifyAdmin, async (req, res) => {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('usuarios')
-      .select(`
-        id,
-        email,
-        nombre,
-        estado,
-        activo,
-        mfa_habilitado,
-        roles:rol_id (nombre_rol)
-      `)
-      .order('nombre', { ascending: true });
-
-    if (error) throw error;
-
-    res.json({
-      success: true,
-      users: data.map(u => ({
-        id: u.id,
-        email: u.email,
-        nombre: u.nombre,
-        rol: u.roles?.nombre_rol,
-        estado: u.estado,
-        activo: u.activo,
-        mfaHabilitado: u.mfa_habilitado
-      }))
-    });
-
-  } catch (error) {
-    console.error("❌ Error listando usuarios:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ====================================
-// 📝 ACTUALIZAR USUARIO
-// ====================================
-app.put('/api/admin/users/:userId', verifyAdmin, async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { nombre, rol, estado, mfaHabilitado } = req.body;
-
-    const updates = {
+    await supabaseAdmin.from("usuarios").insert({
+      id: authUser.user.id,
+      email,
       nombre,
-      activo: estado === 'activo',
-      estado,
-      mfa_habilitado: mfaHabilitado
-    };
-
-    if (rol) {
-      const { data: roleData } = await supabaseAdmin
-        .from('roles')
-        .select('id')
-        .eq('nombre_rol', rol)
-        .single();
-
-      if (roleData) updates.rol_id = roleData.id;
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('usuarios')
-      .update(updates)
-      .eq('id', userId)
-      .select(`
-        *,
-        roles:rol_id (nombre_rol)
-      `)
-      .single();
-
-    if (error) throw error;
-
-    res.json({
-      success: true,
-      user: {
-        id: data.id,
-        nombre: data.nombre,
-        email: data.email,
-        rol: data.roles?.nombre_rol,
-        estado: data.estado,
-        mfaHabilitado: data.mfa_habilitado
-      }
+      rol_id: roleData.id,
+      mfa_habilitado,
+      activo: true,
+      estado: "activo",
     });
 
+    return res.json({ success: true });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.json({ success: false, error: error.message });
   }
 });
 
-// ====================================
-// 🗑️ ELIMINAR USUARIO
-// ====================================
-app.delete('/api/admin/users/:userId', verifyAdmin, async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    await supabaseAdmin.from('usuarios').delete().eq('id', userId);
-
-    const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(userId);
-
-    if (authError) console.warn('⚠️ Usuario eliminado de BD pero no de Auth');
-
-    res.json({ success: true });
-
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ====================================
-// 🔑 CAMBIAR CONTRASEÑA
-// ====================================
-app.post('/api/admin/users/:userId/reset-password', verifyAdmin, async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { newPassword } = req.body;
-
-    if (!newPassword || newPassword.length < 8) {
-      return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
-    }
-
-    const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
-      password: newPassword
-    });
-
-    if (error) throw error;
-
-    res.json({
-      success: true,
-      message: 'Contraseña actualizada correctamente'
-    });
-
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ====================================
-// 🏥 HEALTH CHECK
-// ====================================
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// Iniciar servidor
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor admin corriendo en http://localhost:${PORT}`);
-  console.log(`🔐 Usando Supabase: ${process.env.REACT_APP_SUPABASE_URL}`);
-});
+// ===========================================================
+app.listen(PORT, () =>
+  console.log(`🚀 API running on http://localhost:${PORT}`)
+);
