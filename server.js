@@ -16,7 +16,7 @@ app.use(express.json());
 global.MFA_CODE = {}; // { email: { code: '123456', expires: timestamp } }
 
 // ===========================================================
-// 🔐 SUPABASE ADMIN (SERVICE ROLE KEY)
+// 🔐 SUPABASE ADMIN (SERVICE ROLE KEY) — SIN RLS
 // ===========================================================
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
@@ -30,25 +30,21 @@ const supabaseAdmin = createClient(
 );
 
 // ===========================================================
-// 📧 CONFIGURACIÓN SMTP GMAIL (CORREGIDO)
+// 📧 CONFIGURACIÓN SMTP GMAIL
 // ===========================================================
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
-    user: process.env.EMAIL_USER,        // 👈 antes era MFA_EMAIL
-    pass: process.env.EMAIL_PASS_APP,    // 👈 antes era MFA_EMAIL_PASSWORD
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS_APP,
   },
 });
 
 // ===========================================================
-// 📧 FUNCIÓN FINAL PARA ENVIAR OTP
+// 📧 FUNCIÓN PARA ENVIAR OTP
 // ===========================================================
 async function sendMFAEmail(email, otp) {
-
-  if (!otp) {
-    console.log("❌ ERROR: OTP vacío antes de enviar correo");
-    throw new Error("OTP vacío");
-  }
+  if (!otp) throw new Error("OTP vacío");
 
   return transporter.sendMail({
     from: `"Sistema Tributario" <${process.env.EMAIL_USER}>`,
@@ -63,37 +59,30 @@ async function sendMFAEmail(email, otp) {
 }
 
 // ===========================================================
-// 📧 ENVIAR OTP (SOLO UN SISTEMA, YA NO HAY DUPLICADOS)
+// 📧 ENVIAR OTP
 // ===========================================================
 app.post("/api/send-otp", async (req, res) => {
   try {
     const { email, otp } = req.body;
 
-    if (!otp) {
-      console.log("❌ /api/send-otp recibió OTP vacío");
-      return res.json({ success: false, error: "OTP vacío" });
-    }
+    if (!otp) return res.json({ success: false, error: "OTP vacío" });
 
-    // Guardar en memoria
     global.MFA_CODE[email] = {
       code: otp,
       expires: Date.now() + 5 * 60 * 1000,
     };
-
-    console.log("📨 Enviando OTP real:", otp);
 
     await sendMFAEmail(email, otp);
 
     return res.json({ success: true });
 
   } catch (error) {
-    console.error("❌ Error enviando OTP:", error);
     return res.json({ success: false, error: error.message });
   }
 });
 
 // ===========================================================
-// 🔐 LOGIN (solo email + password)
+// 🔐 LOGIN
 // ===========================================================
 app.post("/api/auth/login", async (req, res) => {
   try {
@@ -104,9 +93,7 @@ app.post("/api/auth/login", async (req, res) => {
       password,
     });
 
-    if (error) {
-      return res.json({ success: false, error: error.message });
-    }
+    if (error) return res.json({ success: false, error: error.message });
 
     const { data: profile } = await supabaseAdmin
       .from("usuarios")
@@ -132,7 +119,6 @@ app.post("/api/auth/login", async (req, res) => {
 app.post("/api/mfa/verify", async (req, res) => {
   try {
     const { email, code } = req.body;
-
     const saved = global.MFA_CODE[email];
 
     if (!saved)
@@ -147,6 +133,76 @@ app.post("/api/mfa/verify", async (req, res) => {
     delete global.MFA_CODE[email];
 
     return res.json({ success: true });
+
+  } catch (error) {
+    return res.json({ success: false, error: error.message });
+  }
+});
+
+// ===========================================================
+// 🛡 VERIFY ADMIN (middleware)
+// ===========================================================
+async function verifyAdmin(req, res, next) {
+  try {
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    if (!token) return res.status(401).json({ success: false, error: "No autorizado" });
+
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !user) return res.status(401).json({ success: false, error: "Token inválido" });
+
+    const { data: perfil } = await supabaseAdmin
+      .from("usuarios")
+      .select("roles:rol_id(nombre_rol)")
+      .eq("id", user.id)
+      .single();
+
+    if (perfil?.roles?.nombre_rol !== "admin") {
+      return res.status(403).json({ success: false, error: "No eres admin" });
+    }
+
+    next();
+
+  } catch (error) {
+    return res.status(401).json({ success: false, error: "Unauthorized" });
+  }
+}
+
+// ===========================================================
+// 🆕 **GET LISTA DE USUARIOS (ADMIN PANEL)** — FIX FINAL
+// ===========================================================
+app.get("/api/admin/users", verifyAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("usuarios")
+      .select(`
+        id,
+        email,
+        nombre,
+        rol_id,
+        activo,
+        mfa_habilitado,
+        estado,
+        roles:rol_id ( nombre_rol )
+      `);
+
+    if (error) {
+      console.error("❌ Error Supabase:", error);
+      return res.json({ success: false, error: error.message });
+    }
+
+    const usuarios = data.map(u => ({
+      id: u.id,
+      email: u.email,
+      nombre: u.nombre,
+      rol: u.roles?.nombre_rol || "sin-rol",
+      estado: u.activo ? "activo" : "suspendido",
+      mfaHabilitado: u.mfa_habilitado
+    }));
+
+    return res.json({
+      success: true,
+      users: usuarios,
+    });
 
   } catch (error) {
     return res.json({ success: false, error: error.message });

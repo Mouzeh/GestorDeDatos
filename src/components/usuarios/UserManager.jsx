@@ -3,6 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import Header from '../ui/Header';
 import UserForm from './UserForm';
+import { usersService } from '../../services/supabase/users';
+
 import {
   Users,
   UserPlus,
@@ -11,14 +13,21 @@ import {
   Trash2,
   Shield,
   User,
-  CheckCircle,
-  XCircle
+  CheckCircle
 } from 'lucide-react';
 
-const API_URL = "http://localhost:3001/api/admin"; // 👈 BACKEND REAL
+// ✅ Nombres de rol REALES desde la BD (tabla roles.nombre_rol)
+const roleMap = {
+  admin: "admin",
+  corredor: "corredor",
+  auditor: "auditor",
+};
+
+// 🔥 BACKEND REAL (el mismo puerto que usas en server.js)
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000/api";
 
 const UserManager = () => {
-  const { user: currentUser } = useAuth();
+  const { user: currentUser, token } = useAuth();
 
   const [users, setUsers] = useState([]);
   const [filteredUsers, setFilteredUsers] = useState([]);
@@ -30,13 +39,19 @@ const UserManager = () => {
   const [showUserForm, setShowUserForm] = useState(false);
 
   // ============================================================
-  // 🚀 CARGAR USUARIOS DESDE EL BACKEND
+  // 🚀 Cargar usuarios DESDE BACKEND (bypass RLS)
   // ============================================================
   const loadUsers = async () => {
     try {
-      const token = localStorage.getItem("token");
+      if (!token) {
+        console.warn("⚠ No hay token, no se pueden cargar usuarios");
+        setUsers([]);
+        setFilteredUsers([]);
+        setLoading(false);
+        return;
+      }
 
-      const res = await fetch(`${API_URL}/users`, {
+      const res = await fetch(`${API_URL}/admin/users`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -45,23 +60,26 @@ const UserManager = () => {
       const data = await res.json();
 
       if (!data.success) {
-        console.error("❌ Error cargando usuarios:", data.error);
+        console.error("❌ Error cargando usuarios desde backend:", data.error);
         setUsers([]);
         setFilteredUsers([]);
         setLoading(false);
         return;
       }
 
+      // data.users viene ya normalizado desde server.js
       const usersFormatted = data.users.map((u) => ({
         ...u,
         avatar: u.nombre
-          .split(" ")
+          ?.split(" ")
           .map((n) => n[0])
           .join("")
           .toUpperCase(),
-        fechaRegistro: "—",
-        ultimoAcceso: "Nunca",
+        fechaRegistro: u.fechaRegistro || "—",
+        ultimoAcceso: u.ultimoAcceso || "Nunca",
       }));
+
+      console.log("📦 Usuarios cargados desde backend:", usersFormatted);
 
       setUsers(usersFormatted);
       setFilteredUsers(usersFormatted);
@@ -75,6 +93,7 @@ const UserManager = () => {
 
   useEffect(() => {
     loadUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ============================================================
@@ -83,18 +102,23 @@ const UserManager = () => {
   useEffect(() => {
     let f = [...users];
 
+    // Buscar por nombre o email
     if (searchTerm) {
+      const term = searchTerm.toLowerCase();
       f = f.filter(
         (u) =>
-          u.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          u.email.toLowerCase().includes(searchTerm.toLowerCase())
+          u.nombre?.toLowerCase().includes(term) ||
+          u.email?.toLowerCase().includes(term)
       );
     }
 
+    // Filtrar por rol (UI → valor real en BD)
     if (roleFilter !== "all") {
-      f = f.filter((u) => u.rol === roleFilter);
+      const realRole = roleMap[roleFilter]; // admin → "admin", corredor → "corredor", etc.
+      f = f.filter((u) => u.rol === realRole);
     }
 
+    // Filtrar por estado
     if (statusFilter !== "all") {
       f = f.filter((u) => u.estado === statusFilter);
     }
@@ -103,7 +127,7 @@ const UserManager = () => {
   }, [searchTerm, roleFilter, statusFilter, users]);
 
   // ============================================================
-  // ✏ EDITAR USUARIO
+  // ✏ Editar usuario
   // ============================================================
   const handleEditUser = (user) => {
     setEditingUser(user);
@@ -111,73 +135,35 @@ const UserManager = () => {
   };
 
   // ============================================================
-  // 🗑 ELIMINAR USUARIO
+  // 🗑 Eliminar usuario
   // ============================================================
   const handleDeleteUser = async (user) => {
     if (!window.confirm(`¿Eliminar a ${user.nombre}?`)) return;
 
-    try {
-      const token = localStorage.getItem("token");
+    const result = await usersService.deleteUser(user.id);
 
-      const res = await fetch(`${API_URL}/users/${user.id}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      const data = await res.json();
-
-      if (data.success) {
-        loadUsers();
-      } else {
-        alert("❌ Error eliminando usuario: " + data.error);
-      }
-    } catch (error) {
-      console.error(error);
-      alert("❌ Error eliminando usuario.");
+    if (result.success) {
+      loadUsers();
+    } else {
+      alert("❌ Error eliminando usuario: " + result.error);
     }
   };
 
   // ============================================================
-  // 💾 CREAR / ACTUALIZAR USUARIO (SOLO BACKEND)
+  // 💾 Guardar usuario (crear / actualizar)
   // ============================================================
   const handleSaveUser = async (userData) => {
-    try {
-      const token = localStorage.getItem("token");
+    const result = editingUser
+      ? await usersService.updateUser(editingUser.id, userData)
+      : await usersService.createUser(userData);
 
-      let method = "POST";
-      let url = `${API_URL}/users`;
-
-      if (editingUser) {
-        method = "PUT";
-        url = `${API_URL}/users/${editingUser.id}`;
-      }
-
-      const res = await fetch(url, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(userData),
-      });
-
-      const data = await res.json();
-
-      if (!data.success) {
-        alert("❌ Error: " + data.error);
-        return;
-      }
-
+    if (result.success) {
       await loadUsers();
       setShowUserForm(false);
       setEditingUser(null);
-
       alert("✔ Usuario guardado con éxito");
-    } catch (error) {
-      console.error("❌ Error:", error);
-      alert("❌ Error guardando usuario.");
+    } else {
+      alert("❌ Error: " + result.error);
     }
   };
 
@@ -204,6 +190,7 @@ const UserManager = () => {
       <Header />
 
       <div className="max-w-7xl mx-auto py-8 px-4">
+
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
           <div>
@@ -220,7 +207,7 @@ const UserManager = () => {
           </button>
         </div>
 
-        {/* Conteo */}
+        {/* Conteos */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           <div className="card text-center bg-blue-50 border-blue-200">
             <Users className="w-8 h-8 text-blue-600 mx-auto mb-2" />
@@ -312,7 +299,7 @@ const UserManager = () => {
                     <td className="table-cell">
                       <div className="flex items-center space-x-3">
                         <div
-                          className={`w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center text-white font-semibold`}
+                          className="w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center text-white font-semibold"
                         >
                           {user.avatar}
                         </div>

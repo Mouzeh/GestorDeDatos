@@ -1,6 +1,7 @@
+// src/services/supabase/auth.js
 import { supabase } from '../../config/supabase';
 
-// 🔥 URL DEL BACKEND REAL
+// 🔥 BACKEND REAL (para enviar OTP por email)
 const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000/api";
 
 export const authService = {
@@ -12,7 +13,7 @@ export const authService = {
     try {
       console.log("🔐 Iniciando login para:", email);
 
-      // 1. Autenticación en Supabase
+      // 1) Login en Supabase (auth)
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password
@@ -22,7 +23,7 @@ export const authService = {
 
       const authUser = data.user;
 
-      // 2. Obtener perfil desde BD
+      // 2) Obtener perfil desde la BD pública
       const { data: profile, error: profileError } = await supabase
         .from("usuarios")
         .select(`
@@ -32,9 +33,10 @@ export const authService = {
         .eq("id", authUser.id)
         .single();
 
-      // Si el perfil NO existe → crearlo
+      // Si perfil NO existe → crearlo automáticamente
       if (profileError && profileError.code === "PGRST116") {
         const newProfile = await this.createUserProfile(authUser);
+
         return {
           success: true,
           requiresMFA: false,
@@ -45,7 +47,7 @@ export const authService = {
 
       if (profileError) throw profileError;
 
-      // 3. SI NO tiene MFA → login directo
+      // 3) SI NO tiene MFA → login directo
       if (!profile.mfa_habilitado) {
         return {
           success: true,
@@ -55,7 +57,7 @@ export const authService = {
         };
       }
 
-      // 4. MFA HABILITADO → enviar OTP al correo
+      // 4) MFA HABILITADO → enviar OTP
       console.log("📨 Enviando OTP a:", profile.email);
 
       const otpResponse = await this.generateEmailOTP(profile.id, profile.email);
@@ -78,14 +80,14 @@ export const authService = {
   },
 
   // ===================================================
-  // 🔥 GENERAR OTP: Guardar en BD + Enviar al backend real
+  // 🔥 GENERAR OTP → Guardar en BD + enviar al backend real
   // ===================================================
   async generateEmailOTP(userId, email) {
     try {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       console.log("🔢 OTP generado:", otp);
 
-      // 1) Guardar OTP en base de datos
+      // 1) Guardar OTP en DB
       const { error: updateError } = await supabase
         .from("usuarios")
         .update({
@@ -96,7 +98,7 @@ export const authService = {
 
       if (updateError) throw updateError;
 
-      // 2) Enviar OTP al backend para que mande correo
+      // 2) Enviar correo desde tu backend real
       const res = await fetch(`${API_URL}/send-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -124,6 +126,7 @@ export const authService = {
   // ===================================================
   async verifyMFA(email, code) {
     try {
+      // Obtener usuario desde BD
       const { data: profile, error } = await supabase
         .from("usuarios")
         .select("*")
@@ -141,7 +144,7 @@ export const authService = {
       if (new Date(profile.otp_expires) < new Date())
         throw new Error("El código MFA expiró");
 
-      // Limpiar código
+      // Limpiar OTP
       await supabase
         .from("usuarios")
         .update({ otp_code: null, otp_expires: null })
@@ -158,7 +161,7 @@ export const authService = {
   },
 
   // ===================================================
-  // 👤 GET CURRENT USER
+  // 👤 Current User
   // ===================================================
   async getCurrentUser() {
     try {
@@ -183,7 +186,7 @@ export const authService = {
   },
 
   // ===================================================
-  // 🏷️ CREAR PERFIL AUTOMÁTICAMENTE
+  // 👤 Crear perfil automáticamente (si no existe)
   // ===================================================
   async createUserProfile(authUser) {
     const defaultRoleId = await this.getDefaultRoleId();
@@ -203,7 +206,6 @@ export const authService = {
       .single();
 
     if (error) throw error;
-
     return profile;
   },
 
@@ -224,11 +226,17 @@ export const authService = {
       .replace(/\b\w/g, l => l.toUpperCase());
   },
 
+  // ===================================================
+  // 🚪 Logout
+  // ===================================================
   async logout() {
     await supabase.auth.signOut();
     return { success: true };
   },
 
+  // ===================================================
+  // 🔍 Check session
+  // ===================================================
   async checkSession() {
     return await supabase.auth.getSession();
   }

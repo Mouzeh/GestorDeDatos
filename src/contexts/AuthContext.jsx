@@ -1,5 +1,7 @@
-import React, { createContext, useState, useContext, useEffect } from "react";
+// src/contexts/AuthContext.jsx
+import React, { createContext, useState, useContext, useEffect, useCallback } from "react";
 import { authService } from "../services/supabase/auth";
+import { supabase } from "../config/supabase";
 
 const AuthContext = createContext();
 
@@ -23,29 +25,78 @@ export const AuthProvider = ({ children }) => {
   const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000/api";
 
   // ===============================================================
-  // 🔄 Cargar sesión activa
+  // ✔ Función interna: cargar usuario + rol real desde BD
   // ===============================================================
-  useEffect(() => {
-    checkAuth();
+  const loadUserWithRole = useCallback(async (authUser) => {
+    if (!authUser) return null;
+
+    try {
+      const { data: perfil, error } = await supabase
+        .from("usuarios")
+        .select(
+          `
+          id,
+          email,
+          nombre,
+          rol_id,
+          roles (
+            nombre_rol
+          )
+        `
+        )
+        .eq("id", authUser.id)
+        .single();
+
+      if (error) {
+        console.warn("⚠ No se pudo cargar rol:", error.message);
+        return { ...authUser, rol: null };
+      }
+
+      return {
+        ...authUser,
+        nombre: perfil.nombre,
+        rol: perfil.roles?.nombre_rol || null,
+      };
+    } catch (e) {
+      console.error("❌ Error cargando rol:", e);
+      return { ...authUser, rol: null };
+    }
   }, []);
 
-  const checkAuth = async () => {
+  // ===============================================================
+  // 🔄 CHECK AUTH — Optimizado para evitar el warning
+  // ===============================================================
+  const checkAuth = useCallback(async () => {
     try {
       if (!token) {
+        setUser(null);
         setLoading(false);
         return;
       }
 
-      const userData = await authService.getCurrentUser();
-      setUser(userData);
+      const authUser = await authService.getCurrentUser();
+
+      if (!authUser) {
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
+      const fullUser = await loadUserWithRole(authUser);
+      setUser(fullUser);
 
     } catch (error) {
-      console.error("❌ Error checking auth:", error);
+      console.error("❌ Error en checkAuth:", error);
       logout();
     } finally {
       setLoading(false);
     }
-  };
+  }, [token, loadUserWithRole]);
+
+  // Ejecutar al iniciar
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
 
   // ===============================================================
   // 🔐 LOGIN
@@ -56,21 +107,18 @@ export const AuthProvider = ({ children }) => {
     try {
       const result = await authService.login(email, password);
 
-      if (!result.success) {
-        return { success: false, error: result.error };
-      }
+      if (!result.success) return result;
 
-      // ======================================
-      // 🔥 SI TIENE MFA (BACKEND ya envió el correo)
-      // ======================================
+      // 🔥 Requiere MFA
       if (result.requiresMFA) {
         setRequiresMFA(true);
         setPendingEmail(result.email);
         return { success: true, requiresMFA: true };
       }
 
-      // 🔓 Login normal sin MFA
-      setUser(result.user);
+      // 🔓 Login normal
+      const fullUser = await loadUserWithRole(result.user);
+      setUser(fullUser);
 
       if (result.token) {
         localStorage.setItem("token", result.token);
@@ -79,15 +127,15 @@ export const AuthProvider = ({ children }) => {
 
       return { success: true, requiresMFA: false };
 
-    } catch (error) {
-      return { success: false, error: error.message };
+    } catch (err) {
+      return { success: false, error: err.message };
     } finally {
       setLoading(false);
     }
   };
 
   // ===============================================================
-  // 🔐 VERIFICAR MFA (email OTP)
+  // 🔐 VERIFICAR MFA OTP
   // ===============================================================
   const verifyEmailOTP = async (code) => {
     setLoading(true);
@@ -96,40 +144,37 @@ export const AuthProvider = ({ children }) => {
       const res = await fetch(`${API_URL}/mfa/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: pendingEmail,
-          code
-        })
+        body: JSON.stringify({ email: pendingEmail, code }),
       });
 
       const json = await res.json();
 
-      if (!json.success)
+      if (!json.success) {
         return { success: false, error: json.error };
+      }
 
-      // 🔓 MFA OK → cargar usuario real
-      const userData = await authService.getCurrentUser();
-      setUser(userData);
+      // 🔓 MFA OK → obtener sesión real
+      const authUser = await authService.getCurrentUser();
+      const fullUser = await loadUserWithRole(authUser);
 
-      // Recuperar token real
+      setUser(fullUser);
+
       const session = await authService.checkSession();
       const sessionToken = session?.data?.session?.access_token;
 
       if (sessionToken) {
         localStorage.setItem("token", sessionToken);
         setToken(sessionToken);
-      } else {
-        console.warn("⚠ No se pudo obtener token luego del MFA");
       }
 
-      // Limpiar estado MFA
+      // limpiar estados MFA
       setRequiresMFA(false);
       setPendingEmail("");
 
       return { success: true };
 
-    } catch (error) {
-      return { success: false, error: error.message };
+    } catch (err) {
+      return { success: false, error: err.message };
     } finally {
       setLoading(false);
     }
@@ -157,12 +202,8 @@ export const AuthProvider = ({ children }) => {
     verifyEmailOTP,
     logout,
     loading,
-    requiresMFA
+    requiresMFA,
   };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

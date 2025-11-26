@@ -4,11 +4,11 @@ import { supabase } from '../../config/supabase';
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
 
 export const usersService = {
-  
+
   /**
-   * ============================================
-   * 🔐 Obtener token del usuario autenticado
-   * ============================================
+   * ==================================================
+   * 🔑 Obtener token JWT
+   * ==================================================
    */
   async getAuthToken() {
     const { data: { session } } = await supabase.auth.getSession();
@@ -16,26 +16,21 @@ export const usersService = {
   },
 
   /**
-   * ============================================
-   * 🆕 Crear usuario vía API (backend)
-   * ============================================
+   * ==================================================
+   * 🆕 Crear usuario vía API
+   * ==================================================
    */
   async createUser(userData) {
     try {
       console.log('🆕 Enviando creación de usuario al backend...', userData);
 
-      // Validar contraseña
       if (!userData.password) {
         throw new Error('La contraseña es requerida para crear un usuario');
       }
 
-      // Obtener token JWT
       const token = await this.getAuthToken();
-      if (!token) {
-        throw new Error('No estás autenticado');
-      }
+      if (!token) throw new Error('No estás autenticado');
 
-      // Llamada al backend
       const response = await fetch(`${API_URL}/admin/users`, {
         method: 'POST',
         headers: {
@@ -59,28 +54,22 @@ export const usersService = {
       }
 
       console.log('✅ Usuario creado exitosamente en backend');
-      return {
-        success: true,
-        user: result.user
-      };
+      return { success: true, user: result.user };
 
     } catch (error) {
       console.error('❌ Error en createUser:', error);
-      return {
-        success: false,
-        error: error.message
-      };
+      return { success: false, error: error.message };
     }
   },
 
   /**
-   * ============================================
-   * 📄 Obtener todos los usuarios (Sigue igual)
-   * ============================================
+   * ==================================================
+   * 📄 Obtener TODOS los usuarios (sin filtros)
+   * ==================================================
    */
-  async getUsers(filters = {}) {
+  async getUsers() {
     try {
-      let query = supabase
+      const { data, error } = await supabase
         .from('usuarios')
         .select(`
           *,
@@ -90,47 +79,34 @@ export const usersService = {
             descripcion,
             permisos
           )
-        `);
-
-      if (filters.rol) {
-        query = query.eq('roles.nombre_rol', filters.rol);
-      }
-      
-      if (filters.estado !== undefined) {
-        query = query.eq('activo', filters.estado);
-      }
-
-      const { data, error } = await query.order('creado_en', { ascending: false });
+        `)
+        .order('creado_en', { ascending: false });
 
       if (error) throw error;
 
-      return {
-        success: true,
-        users: data.map(user => ({
-          id: user.id,
-          nombre: user.nombre,
-          email: user.email,
-          rol: user.roles?.nombre_rol,
-          estado: user.activo ? 'activo' : 'suspendido',
-          mfaHabilitado: user.mfa_habilitado,
-          ultimoAcceso: user.ultimo_acceso,
-          fechaRegistro: user.creado_en
-        }))
-      };
+      const users = data.map(user => ({
+        id: user.id,
+        nombre: user.nombre,
+        email: user.email,
+        rol: user.roles?.nombre_rol || "Sin rol",
+        estado: user.activo ? "activo" : "suspendido",
+        mfaHabilitado: user.mfa_habilitado,
+        ultimoAcceso: user.ultimo_acceso,
+        fechaRegistro: user.creado_en
+      }));
+
+      return { success: true, users };
+
     } catch (error) {
       console.error('❌ Error obteniendo usuarios:', error);
-      return {
-        success: false,
-        error: error.message,
-        users: []
-      };
+      return { success: false, error: error.message, users: [] };
     }
   },
 
   /**
-   * ============================================
-   * ✏ Actualizar usuario DIRECTO en Supabase DB
-   * ============================================
+   * ==================================================
+   * ✏ Actualizar usuario
+   * ==================================================
    */
   async updateUser(userId, userData) {
     try {
@@ -173,7 +149,6 @@ export const usersService = {
 
       if (error) throw error;
 
-      console.log('✅ Usuario actualizado');
       return {
         success: true,
         user: {
@@ -185,19 +160,17 @@ export const usersService = {
           mfaHabilitado: data.mfa_habilitado
         }
       };
+
     } catch (error) {
       console.error('❌ Error actualizando usuario:', error);
-      return {
-        success: false,
-        error: error.message
-      };
+      return { success: false, error: error.message };
     }
   },
 
   /**
-   * ============================================
+   * ==================================================
    * 🗑 Eliminar usuario
-   * ============================================
+   * ==================================================
    */
   async deleteUser(userId) {
     try {
@@ -210,10 +183,7 @@ export const usersService = {
 
       if (error) throw error;
 
-      return {
-        success: true,
-        message: 'Usuario eliminado correctamente'
-      };
+      return { success: true, message: 'Usuario eliminado correctamente' };
     } catch (error) {
       console.error('❌ Error eliminando usuario:', error);
       return { success: false, error: error.message };
@@ -221,9 +191,9 @@ export const usersService = {
   },
 
   /**
-   * ============================================
-   * 🔑 Reset de contraseña
-   * ============================================
+   * ==================================================
+   * 🔑 Reset password
+   * ==================================================
    */
   async requestPasswordReset(email) {
     try {
