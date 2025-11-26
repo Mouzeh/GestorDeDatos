@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { certificatesService } from '../../services/supabase/certificates';
+import { supabase } from '../../config/supabase'; // 👈 IMPORTAR supabase DIRECTAMENTE
 import { Search, Filter, Download, Eye, Edit, Trash2, File, RefreshCw } from 'lucide-react';
 
 const CertificateList = () => {
@@ -13,22 +13,44 @@ const CertificateList = () => {
   const [refreshing, setRefreshing] = useState(false);
 
   // -----------------------------------------------------
-  // Cargar certificados reales desde Supabase
+  // Cargar certificados REAL desde Supabase - CORREGIDO
   // -----------------------------------------------------
   const loadCertificates = async () => {
     setLoading(true);
     try {
-      const result = await certificatesService.getCertificates(user.id);
-
-      if (result.success) {
-        console.log("📥 Certificados cargados:", result.certificates);
-        setCertificates(result.certificates);
-      } else {
-        console.error("❌ Error cargando certificados:", result.error);
+      console.log('🔄 Cargando certificados para usuario:', user?.id);
+      
+      // Verificar que hay usuario autenticado
+      if (!user?.id) {
+        console.error('❌ No hay usuario autenticado');
         setCertificates([]);
+        return;
       }
+
+      // 🔥 CONSULTA DIRECTA a Supabase - SIN servicios
+      const { data: certificados, error } = await supabase
+        .from('certificados_tributarios')
+        .select('*')
+        .eq('usuario_id', user.id)
+        .order('fecha_carga', { ascending: false });
+
+      if (error) {
+        console.error('❌ Error cargando certificados:', error);
+        
+        // Mostrar error específico
+        if (error.code === 'PGRST301') {
+          console.error('🔒 Error de permisos RLS - Revisa políticas de la tabla');
+        }
+        
+        setCertificates([]);
+        return;
+      }
+
+      console.log('✅ Certificados cargados:', certificados);
+      setCertificates(certificados || []);
+
     } catch (error) {
-      console.error("❌ Error en loadCertificates:", error);
+      console.error('💥 Error en loadCertificates:', error);
       setCertificates([]);
     } finally {
       setLoading(false);
@@ -37,22 +59,25 @@ const CertificateList = () => {
   };
 
   useEffect(() => {
-    loadCertificates();
+    if (user?.id) {
+      loadCertificates();
+    }
     // Permitir refrescar desde otros componentes
     window.updateCertificateList = loadCertificates;
-  }, [user.id]);
+  }, [user?.id]);
 
   // -----------------------------------------------------
-  // Filtrado dinámico
+  // Filtrado dinámico - CORREGIDO para campos reales
   // -----------------------------------------------------
   useEffect(() => {
     let filtered = certificates;
 
     if (searchTerm) {
       filtered = filtered.filter(cert =>
-        cert.nombre_archivo?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        cert.emisor?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        cert.contribuyente?.toLowerCase().includes(searchTerm.toLowerCase())
+        cert.nombre_archivo?.toLowerCase().includes(searchTerm.toLowerCase())
+        // 👇 REMOVER emisor y contribuyente si no existen en tu BD
+        // || cert.emisor?.toLowerCase().includes(searchTerm.toLowerCase())
+        // || cert.contribuyente?.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
 
@@ -64,7 +89,7 @@ const CertificateList = () => {
   }, [searchTerm, statusFilter, certificates]);
 
   // -----------------------------------------------------
-  // Badge de estado
+  // Badge de estado - MEJORADO
   // -----------------------------------------------------
   const getStatusBadge = (estado) => {
     const statusConfig = {
@@ -84,65 +109,96 @@ const CertificateList = () => {
   };
 
   // -----------------------------------------------------
-  // Descargar archivo real desde Supabase
+  // Descargar archivo real desde Supabase - CORREGIDO
   // -----------------------------------------------------
   const handleDownload = async (certificate) => {
     try {
-      const result = await certificatesService.downloadCertificate(certificate.storage_key);
+      console.log('📥 Descargando:', certificate.storage_key);
+      
+      const { data, error } = await supabase.storage
+        .from('certificados')
+        .download(certificate.storage_key);
 
-      if (!result.success) {
-        return alert("Error al descargar: " + result.error);
+      if (error) {
+        console.error('❌ Error descargando:', error);
+        alert("Error al descargar: " + error.message);
+        return;
       }
 
-      const url = window.URL.createObjectURL(result.file);
+      // Crear URL y descargar
+      const url = window.URL.createObjectURL(data);
       const a = document.createElement("a");
-
       a.href = url;
-      a.download = certificate.nombre_archivo;
+      a.download = certificate.nombre_archivo || 'certificado.pdf';
+      document.body.appendChild(a);
       a.click();
-
+      document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
+
+      console.log('✅ Descarga completada');
+
     } catch (error) {
+      console.error('💥 Error en handleDownload:', error);
       alert("Error al descargar archivo: " + error.message);
     }
   };
 
   // -----------------------------------------------------
-  // Eliminar archivo real desde Supabase
+  // Eliminar archivo real desde Supabase - CORREGIDO
   // -----------------------------------------------------
   const handleDelete = async (certificate) => {
     if (!window.confirm(`¿Eliminar el certificado "${certificate.nombre_archivo}"?`)) return;
 
     try {
-      const result = await certificatesService.deleteCertificate(
-        certificate.id,
-        certificate.storage_key
-      );
+      console.log('🗑️ Eliminando certificado:', certificate.id);
+      
+      // 1. Eliminar de Storage
+      const { error: storageError } = await supabase.storage
+        .from('certificados')
+        .remove([certificate.storage_key]);
 
-      if (result.success) {
-        setCertificates(prev => prev.filter(c => c.id !== certificate.id));
-        alert("Certificado eliminado correctamente");
-      } else {
-        alert("Error al eliminar: " + result.error);
+      if (storageError) {
+        console.error('❌ Error eliminando de storage:', storageError);
+        // Continuar aunque falle storage (podría no existir el archivo)
       }
+
+      // 2. Eliminar de BD
+      const { error: dbError } = await supabase
+        .from('certificados_tributarios')
+        .delete()
+        .eq('id', certificate.id);
+
+      if (dbError) {
+        console.error('❌ Error eliminando de BD:', dbError);
+        alert("Error al eliminar de BD: " + dbError.message);
+        return;
+      }
+
+      // 3. Actualizar estado local
+      setCertificates(prev => prev.filter(c => c.id !== certificate.id));
+      console.log('✅ Certificado eliminado correctamente');
+      alert("Certificado eliminado correctamente");
+
     } catch (error) {
+      console.error('💥 Error en handleDelete:', error);
       alert("Error al eliminar certificado: " + error.message);
     }
   };
 
   // -----------------------------------------------------
-  // Loading spinner
+  // Loading spinner - MEJORADO
   // -----------------------------------------------------
   if (loading) {
     return (
       <div className="flex justify-center items-center py-12">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <span className="ml-3 text-gray-600">Cargando certificados...</span>
       </div>
     );
   }
 
   // -----------------------------------------------------
-  // Render principal
+  // Render principal - CORREGIDO para campos reales
   // -----------------------------------------------------
   return (
     <div className="space-y-6">
@@ -180,23 +236,30 @@ const CertificateList = () => {
           {/* Botón refrescar */}
           <button
             onClick={() => { setRefreshing(true); loadCertificates(); }}
+            disabled={refreshing}
             className="btn-primary flex items-center gap-2"
           >
             <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-            Refrescar
+            {refreshing ? 'Refrescando...' : 'Refrescar'}
           </button>
         </div>
       </div>
 
-      {/* Tabla */}
+      {/* Debug info */}
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+        <p className="text-sm text-blue-800">
+          🔍 <strong>Debug:</strong> Mostrando {filteredCertificates.length} de {certificates.length} certificados para usuario: {user?.email}
+        </p>
+      </div>
+
+      {/* Tabla - CORREGIDA para estructura real */}
       <div className="card p-0 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
                 <th className="table-header">Archivo</th>
-                <th className="table-header">Emisor</th>
-                <th className="table-header">Contribuyente</th>
+                <th className="table-header">Tamaño</th>
                 <th className="table-header">Fecha</th>
                 <th className="table-header">Estado</th>
                 <th className="table-header">Acciones</th>
@@ -211,26 +274,53 @@ const CertificateList = () => {
                   <td className="table-cell">
                     <div className="flex items-center">
                       <File className="w-4 h-4 text-gray-400 mr-2" />
-                      <span className="font-medium text-gray-900">{certificate.nombre_archivo}</span>
+                      <div>
+                        <span className="font-medium text-gray-900 block">
+                          {certificate.nombre_archivo}
+                        </span>
+                        <span className="text-xs text-gray-500">
+                          {certificate.tipo_archivo}
+                        </span>
+                      </div>
                     </div>
                   </td>
 
-                  <td className="table-cell">{certificate.emisor}</td>
-                  <td className="table-cell">{certificate.contribuyente}</td>
-                  <td className="table-cell">{certificate.fecha_carga}</td>
+                  {/* Tamaño */}
+                  <td className="table-cell">
+                    <span className="text-sm text-gray-600">
+                      {certificate.tamaño_bytes ? (certificate.tamaño_bytes / 1024 / 1024).toFixed(2) + ' MB' : 'N/A'}
+                    </span>
+                  </td>
+
+                  {/* Fecha */}
+                  <td className="table-cell">
+                    <span className="text-sm text-gray-600">
+                      {certificate.fecha_carga ? new Date(certificate.fecha_carga).toLocaleDateString() : 'N/A'}
+                    </span>
+                  </td>
 
                   {/* Estado */}
-                  <td className="table-cell">{getStatusBadge(certificate.estado)}</td>
+                  <td className="table-cell">
+                    {getStatusBadge(certificate.estado)}
+                  </td>
 
                   {/* Acciones */}
                   <td className="table-cell">
                     <div className="flex space-x-2">
-                      <button onClick={() => handleDownload(certificate)} className="text-green-600 hover:text-green-800">
+                      <button 
+                        onClick={() => handleDownload(certificate)} 
+                        className="text-green-600 hover:text-green-800 p-1 rounded hover:bg-green-50"
+                        title="Descargar"
+                      >
                         <Download className="w-4 h-4" />
                       </button>
 
                       {user?.rol === 'admin' && (
-                        <button onClick={() => handleDelete(certificate)} className="text-red-600 hover:text-red-800">
+                        <button 
+                          onClick={() => handleDelete(certificate)} 
+                          className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50"
+                          title="Eliminar"
+                        >
                           <Trash2 className="w-4 h-4" />
                         </button>
                       )}
@@ -246,14 +336,16 @@ const CertificateList = () => {
         {filteredCertificates.length === 0 && (
           <div className="text-center py-12">
             <File className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-500">No se encontraron certificados</p>
+            <p className="text-gray-500 text-lg mb-2">No se encontraron certificados</p>
+            <p className="text-gray-400 text-sm">
+              {certificates.length === 0 ? 'Aún no has subido ningún certificado' : 'Prueba ajustando los filtros'}
+            </p>
           </div>
         )}
       </div>
 
       {/* Estadísticas */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-
         <div className="card text-center">
           <div className="text-2xl font-bold text-gray-900">{certificates.length}</div>
           <div className="text-sm text-gray-600">Total</div>
@@ -279,7 +371,6 @@ const CertificateList = () => {
           </div>
           <div className="text-sm text-gray-600">Con error</div>
         </div>
-
       </div>
     </div>
   );
